@@ -6,7 +6,6 @@ import type { EngineConfig, ExtractedFrames } from "@hyperframes/engine";
 import type { CompiledComposition } from "./htmlCompiler.js";
 
 import {
-  applyRenderModeHints,
   buildMissingFrameRetryBatches,
   collectVideoMetadataHints,
   collectVideoReadinessSkipIds,
@@ -19,16 +18,19 @@ import {
   getNextRetryWorkerCount,
   isRecoverableParallelCaptureError,
   materializeExtractedFramesForCompiledDir,
-  projectBrowserEndToCompositionTimeline,
-  resolveDeviceScaleFactor,
   resolveRenderWorkerCount,
   resolveCompositeTransfer,
   selectCaptureCalibrationFrames,
   shouldFallbackToScreenshotAfterCalibrationError,
   shouldUseLayeredComposite,
   shouldUseStreamingEncode,
-  writeCompiledArtifacts,
 } from "./renderOrchestrator.js";
+import {
+  applyRenderModeHints,
+  projectBrowserEndToCompositionTimeline,
+  resolveDeviceScaleFactor,
+  writeCompiledArtifacts,
+} from "./render/shared.js";
 import { toExternalAssetKey } from "../utils/paths.js";
 
 describe("extractStandaloneEntryFromIndex", () => {

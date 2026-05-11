@@ -28,6 +28,14 @@ export interface CompositionMetadata {
 }
 
 /**
+ * Floating-point tolerance for reconciling browser-discovered media timing
+ * against statically-parsed metadata. Used when the browser reports a
+ * slightly different `end` / `mediaStart` / `volume` than the compiled
+ * HTML and we want to ignore sub-millisecond float noise.
+ */
+export const BROWSER_MEDIA_EPSILON = 0.0001;
+
+/**
  * Browser-discovered media inside inlined sub-compositions can still report
  * scene-local timing from the merged DOM (e.g. start=0, end=85.52) while the
  * compiled metadata is already offset into the parent host timeline

@@ -44,13 +44,12 @@ import {
 import { createFileServer, type FileServerHandle, VIRTUAL_TIME_SHIM } from "../../fileServer.js";
 import type { ProducerLogger } from "../../../logger.js";
 import {
+  BROWSER_MEDIA_EPSILON,
   projectBrowserEndToCompositionTimeline,
   writeCompiledArtifacts,
   type CompositionMetadata,
 } from "../shared.js";
 import type { RenderJob } from "../../renderOrchestrator.js";
-
-const BROWSER_MEDIA_EPSILON = 0.0001;
 
 export interface ProbeStageInput {
   projectDir: string;

@@ -546,14 +546,6 @@ export class RenderCancelledError extends Error {
   }
 }
 
-export {
-  type CompositionMetadata,
-  applyRenderModeHints,
-  projectBrowserEndToCompositionTimeline,
-  resolveDeviceScaleFactor,
-  writeCompiledArtifacts,
-} from "./render/shared.js";
-
 function updateJobStatus(
   job: RenderJob,
   status: RenderStatus,
