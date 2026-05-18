@@ -2,9 +2,11 @@ import { PropertyPanel } from "./editor/PropertyPanel";
 import { MotionPanel } from "./editor/MotionPanel";
 import { LayersPanel } from "./editor/LayersPanel";
 import { CaptionPropertyPanel } from "../captions/components/CaptionPropertyPanel";
+import { BlockParamsPanel } from "./editor/BlockParamsPanel";
 import { RenderQueue } from "./renders/RenderQueue";
 import type { RenderJob } from "./renders/useRenderQueue";
 import type { StudioGsapMotion } from "./editor/studioMotion";
+import type { BlockParam } from "@hyperframes/core/registry";
 import {
   STUDIO_INSPECTOR_PANELS_ENABLED,
   STUDIO_MOTION_PANEL_ENABLED,
@@ -22,12 +24,21 @@ export interface StudioRightPanelProps {
   selectedStudioMotion: StudioMotionData | null;
   designPanelActive: boolean;
   motionPanelActive: boolean;
+  activeBlockParams?: {
+    blockName: string;
+    blockTitle: string;
+    params: BlockParam[];
+    compositionPath: string;
+  } | null;
+  onCloseBlockParams?: () => void;
 }
 
 export function StudioRightPanel({
   selectedStudioMotion,
   designPanelActive,
   motionPanelActive,
+  activeBlockParams,
+  onCloseBlockParams,
 }: StudioRightPanelProps) {
   const {
     rightWidth,
@@ -145,7 +156,15 @@ export function StudioRightPanel({
               </button>
             </div>
             <div className="min-h-0 flex-1">
-              {rightPanelTab === "layers" ? (
+              {rightPanelTab === "block-params" && activeBlockParams ? (
+                <BlockParamsPanel
+                  blockName={activeBlockParams.blockName}
+                  blockTitle={activeBlockParams.blockTitle}
+                  params={activeBlockParams.params}
+                  compositionPath={activeBlockParams.compositionPath}
+                  onClose={onCloseBlockParams ?? (() => {})}
+                />
+              ) : rightPanelTab === "layers" ? (
                 <LayersPanel />
               ) : designPanelActive ? (
                 <PropertyPanel

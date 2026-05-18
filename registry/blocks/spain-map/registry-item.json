@@ -5,7 +5,10 @@
   "title": "Spain Map",
   "description": "Animated Spain choropleth by autonomous community with staggered reveals and gradient legend — D3 conic conformal projection",
   "tags": ["data", "map", "geography", "spain", "europe", "choropleth"],
-  "dimensions": { "width": 1920, "height": 1080 },
+  "dimensions": {
+    "width": 1920,
+    "height": 1080
+  },
   "duration": 12,
   "files": [
     {
@@ -13,5 +16,9 @@
       "target": "compositions/spain-map.html",
       "type": "hyperframes:composition"
     }
-  ]
+  ],
+  "preview": {
+    "video": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/spain-map.mp4",
+    "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/blocks/spain-map.png"
+  }
 }

@@ -42,5 +42,8 @@
       "type": "hyperframes:asset"
     }
   ],
-  "preview": "https://static.heygen.ai/hyperframes-oss/registry/components/caption-texture-lava/preview.mp4?v=1779051416"
+  "preview": {
+    "video": "https://static.heygen.ai/hyperframes-oss/registry/components/caption-texture-lava/preview.mp4?v=1779051416",
+    "poster": "https://static.heygen.ai/hyperframes-oss/docs/images/catalog/components/caption-texture.png"
+  }
 }
