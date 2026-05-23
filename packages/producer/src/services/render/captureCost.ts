@@ -114,6 +114,17 @@ export function resolveRenderWorkerCount(
   log: ProducerLogger = defaultLogger,
   measuredCaptureCost?: CaptureCostEstimate,
 ): number {
+  const reasonCodes = new Set(compiled.renderModeHints.reasons.map((r) => r.code));
+  if (reasonCodes.has("htmlInCanvas")) {
+    if (requestedWorkers !== undefined && requestedWorkers > 1) {
+      log.warn(
+        "[Render] html-in-canvas (drawElementImage) detected — overriding --workers to 1. " +
+          "Chrome does not support concurrent drawElementImage across multiple workers and produces flickering artifacts.",
+      );
+    }
+    return 1;
+  }
+
   const captureCost = combineCaptureCostEstimates(
     estimateCaptureCostMultiplier(compiled),
     measuredCaptureCost,
