@@ -576,4 +576,52 @@ describe("initSandboxRuntimeModular", () => {
     expect(player?.getTime()).toBeCloseTo(1, 1);
     expect(childTimeline.time()).toBeCloseTo(1, 1);
   });
+
+  it("sets __renderReady only after timeline is bound, not at __playerReady time", async () => {
+    const root = document.createElement("div");
+    root.setAttribute("data-composition-id", "main");
+    root.setAttribute("data-root", "true");
+    root.setAttribute("data-start", "0");
+    root.setAttribute("data-width", "1920");
+    root.setAttribute("data-height", "1080");
+    document.body.appendChild(root);
+
+    (window as Window & { __timelines?: Record<string, RuntimeTimelineLike> }).__timelines = {
+      main: createMockTimeline(10),
+    };
+
+    initSandboxRuntimeModular();
+
+    const win = window as Window & {
+      __playerReady?: boolean;
+      __renderReady?: boolean;
+      __player?: { _timeline: RuntimeTimelineLike | null };
+    };
+
+    expect(win.__playerReady).toBe(true);
+    expect(win.__renderReady).toBe(true);
+    expect(win.__player?._timeline).not.toBeNull();
+  });
+
+  it("does not set __renderReady when no timeline is available", () => {
+    const root = document.createElement("div");
+    root.setAttribute("data-composition-id", "main");
+    root.setAttribute("data-root", "true");
+    root.setAttribute("data-start", "0");
+    root.setAttribute("data-width", "1920");
+    root.setAttribute("data-height", "1080");
+    document.body.appendChild(root);
+
+    (window as Window & { __timelines?: Record<string, RuntimeTimelineLike> }).__timelines = {};
+
+    initSandboxRuntimeModular();
+
+    const win = window as Window & {
+      __playerReady?: boolean;
+      __renderReady?: boolean;
+    };
+
+    expect(win.__playerReady).toBe(true);
+    expect(win.__renderReady).toBeUndefined();
+  });
 });

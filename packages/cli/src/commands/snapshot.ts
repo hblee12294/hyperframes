@@ -276,17 +276,14 @@ async function captureSnapshots(
       for (let i = 0; i < positions.length; i++) {
         const time = positions[i]!;
 
-        // 30 = runtime's default canonicalFps (not exposed on PlayerAPI)
         await page.evaluate((t: number) => {
           const player = (window as any).__player;
           if (!player) return;
           const safe = Math.max(0, Number(t) || 0);
-          const frame = Math.floor(safe * 30 + 1e-9);
-          const quantized = frame / 30;
           if (typeof player.renderSeek === "function") {
-            player.renderSeek(quantized);
+            player.renderSeek(safe);
           } else if (typeof player.seek === "function") {
-            player.seek(quantized);
+            player.seek(safe);
           }
           if ((window as any).gsap?.ticker?.tick) {
             (window as any).gsap.ticker.tick();

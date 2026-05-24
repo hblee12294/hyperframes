@@ -1463,7 +1463,9 @@ export function initSandboxRuntimeModular(): void {
       .finally(() => {
         externalCompositionsReady = true;
         bindRootTimelineIfAvailable();
-        (window as Window & { __renderReady?: boolean }).__renderReady = true;
+        if (state.capturedTimeline) {
+          (window as Window & { __renderReady?: boolean }).__renderReady = true;
+        }
         runAdapters("discover", state.currentTime);
         bindMediaMetadataListeners();
         installAssetFailureDiagnostics();
@@ -1650,9 +1652,10 @@ export function initSandboxRuntimeModular(): void {
       if (bindRootTimelineIfAvailable() && state.capturedTimeline !== prevTimeline) {
         player._timeline = state.capturedTimeline;
       }
-      // Re-run adapters to discover new elements
       runAdapters("discover", state.currentTime);
-      (window as Window & { __renderReady?: boolean }).__renderReady = true;
+      if (state.capturedTimeline) {
+        (window as Window & { __renderReady?: boolean }).__renderReady = true;
+      }
       postTimeline();
       postState(true);
     }, 0);
