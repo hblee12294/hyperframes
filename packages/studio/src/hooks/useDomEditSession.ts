@@ -50,7 +50,6 @@ export interface UseDomEditSessionParams {
   compositionLoading: boolean;
   previewIframeRef: React.MutableRefObject<HTMLIFrameElement | null>;
   timelineElements: TimelineElement[];
-  currentTime: number;
   setSelectedTimelineElementId: (id: string | null) => void;
   setRightCollapsed: (collapsed: boolean) => void;
   setRightPanelTab: (tab: RightPanelTab) => void;
@@ -59,6 +58,7 @@ export interface UseDomEditSessionParams {
   queueDomEditSave: (save: () => Promise<void>) => Promise<void>;
   readProjectFile: (path: string) => Promise<string>;
   writeProjectFile: (path: string, content: string) => Promise<void>;
+  updateEditingFileContent: (path: string, content: string) => void;
   domEditSaveTimestampRef: React.MutableRefObject<number>;
   editHistory: { recordEdit: (entry: RecordEditInput) => Promise<void> };
   fileTree: string[];
@@ -91,7 +91,6 @@ export function useDomEditSession({
   compositionLoading,
   previewIframeRef,
   timelineElements,
-  currentTime,
   setSelectedTimelineElementId,
   setRightCollapsed,
   setRightPanelTab,
@@ -100,6 +99,7 @@ export function useDomEditSession({
   queueDomEditSave,
   readProjectFile: _readProjectFile,
   writeProjectFile,
+  updateEditingFileContent,
   domEditSaveTimestampRef,
   editHistory,
   fileTree,
@@ -182,7 +182,6 @@ export function useDomEditSession({
     activeCompPath,
     projectDir,
     projectIdRef,
-    currentTime,
     showToast,
     domEditSelectionRef,
     domEditSelection,
@@ -224,12 +223,25 @@ export function useDomEditSession({
 
   const { version: gsapCacheVersion, bump: bumpGsapCache } = useGsapCacheVersion();
 
+  // Bump GSAP cache when refreshKey changes (code-tab edits trigger iframe
+  // reload via refreshKey but don't go through commitMutation, so the cache
+  // would otherwise retain stale keyframe entries).
+  const prevRefreshKeyRef = useRef(refreshKey);
+  // eslint-disable-next-line no-restricted-syntax
+  useEffect(() => {
+    if (refreshKey !== prevRefreshKeyRef.current) {
+      prevRefreshKeyRef.current = refreshKey;
+      bumpGsapCache();
+    }
+  }, [refreshKey, bumpGsapCache]);
+
   const gsapSourceFile = domEditSelection?.sourceFile || activeCompPath || "index.html";
 
   usePopulateKeyframeCacheForFile(
     STUDIO_GSAP_PANEL_ENABLED ? (projectId ?? null) : null,
     gsapSourceFile,
     gsapCacheVersion,
+    previewIframeRef,
   );
 
   const {
@@ -257,9 +269,12 @@ export function useDomEditSession({
     addGsapFromProperty,
     removeGsapFromProperty,
     addKeyframe,
+    addKeyframeBatch,
     removeKeyframe,
     convertToKeyframes,
     removeAllKeyframes,
+    setArcPath,
+    updateArcSegment,
   } = useGsapScriptCommits({
     projectIdRef,
     activeCompPath,
@@ -268,6 +283,7 @@ export function useDomEditSession({
     domEditSaveTimestampRef,
     reloadPreview,
     onCacheInvalidate: bumpGsapCache,
+    onFileContentChanged: updateEditingFileContent,
   });
 
   // ── Commit handlers (delegated to useDomEditCommits) ──
@@ -416,6 +432,7 @@ export function useDomEditSession({
     handleGsapAddFromProperty,
     handleGsapRemoveFromProperty,
     handleGsapAddKeyframe,
+    handleGsapAddKeyframeBatch,
     handleGsapRemoveKeyframe,
     handleGsapConvertToKeyframes,
     handleGsapRemoveAllKeyframes,
@@ -432,10 +449,10 @@ export function useDomEditSession({
     addGsapFromProperty,
     removeGsapFromProperty,
     addKeyframe,
+    addKeyframeBatch,
     removeKeyframe,
     convertToKeyframes,
     removeAllKeyframes,
-    currentTime,
     handleDomManualEditsReset,
     selectedGsapAnimations,
   });
@@ -448,6 +465,22 @@ export function useDomEditSession({
     previewIframeRef,
     bumpGsapCache,
   });
+
+  const handleSetArcPath = useCallback(
+    (animId: string, config: Parameters<typeof setArcPath>[2]) => {
+      if (!domEditSelection) return;
+      setArcPath(domEditSelection, animId, config);
+    },
+    [domEditSelection, setArcPath],
+  );
+
+  const handleUpdateArcSegment = useCallback(
+    (animId: string, segmentIndex: number, update: Parameters<typeof updateArcSegment>[3]) => {
+      if (!domEditSelection) return;
+      updateArcSegment(domEditSelection, animId, segmentIndex, update);
+    },
+    [domEditSelection, updateArcSegment],
+  );
 
   // Sync selection from preview document on load / refresh
   // eslint-disable-next-line no-restricted-syntax
@@ -589,12 +622,22 @@ export function useDomEditSession({
     handleGsapAddFromProperty,
     handleGsapRemoveFromProperty,
     handleGsapAddKeyframe,
+    handleGsapAddKeyframeBatch,
     handleGsapRemoveKeyframe,
     handleGsapConvertToKeyframes,
     handleGsapRemoveAllKeyframes,
     handleResetSelectedElementKeyframes,
     commitAnimatedProperty,
+    handleSetArcPath,
+    handleUpdateArcSegment,
     invalidateGsapCache: bumpGsapCache,
     previewIframeRef,
+    commitMutation: async (
+      mutation: Record<string, unknown>,
+      options: { label: string; softReload?: boolean },
+    ) => {
+      if (!domEditSelection) return;
+      await gsapCommitMutation(domEditSelection, mutation, options);
+    },
   };
 }
