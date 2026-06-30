@@ -355,23 +355,30 @@ async function captureSnapshots(
 
           const updates: Array<{ videoId: string; dataUri: string }> = [];
           for (const v of active) {
-            let filePath: string | null = null;
+            // Resolve the <video> src to an FFmpeg input. Prefer a project-local
+            // file (fast, sandboxed); fall back to the absolute http(s) URL for
+            // remote assets (e.g. an S3-hosted clip embedded by an upstream agent)
+            // — FFmpeg reads http(s) input directly, and Chrome-headless can't seek
+            // it either, so without this those videos render blank in snapshots.
+            let ffmpegInput: string | null = null;
             try {
               const url = new URL(v.src);
               const decodedPath = decodeURIComponent(url.pathname).replace(/^\//, "");
               const candidate = resolve(projectDir, decodedPath);
               const rel = relative(projectDir, candidate);
               if (!rel.startsWith("..") && !isAbsolute(rel) && existsSync(candidate)) {
-                filePath = candidate;
+                ffmpegInput = candidate;
+              } else if (url.protocol === "http:" || url.protocol === "https:") {
+                ffmpegInput = url.href;
               }
             } catch {
               /* unresolvable src (e.g. blob:, data:) — skip */
             }
-            if (!filePath) continue;
+            if (!ffmpegInput) continue;
             const png = await extractVideoFrameToBuffer(
-              filePath,
+              ffmpegInput,
               Math.max(0, v.relTime),
-              await shouldUseVp9AlphaDecoder(filePath),
+              await shouldUseVp9AlphaDecoder(ffmpegInput),
             );
             if (!png) continue;
             updates.push({
