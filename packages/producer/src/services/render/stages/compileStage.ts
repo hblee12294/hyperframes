@@ -191,6 +191,31 @@ export async function runCompileStage(input: CompileStageInput): Promise<Compile
         "for this render. Capture uses the platform's baseline route.",
     );
   }
+  // Shader-transition comps: page-side compositing is the faster, purpose-built
+  // path for them, and resolveConfig force-disables it whenever drawElement is
+  // on. With drawElement default-on that trade is backwards — prefer page-side
+  // compositing and route these comps to the baseline capture. An explicit
+  // drawElement opt-in keeps the old preference.
+  if (
+    cfg.useDrawElement &&
+    process.env.PRODUCER_EXPERIMENTAL_FAST_CAPTURE !== "true" &&
+    compiled.hasShaderTransitions
+  ) {
+    cfg.useDrawElement = false;
+    log.info(
+      "[Render] Fast capture: composition uses shader transitions — disabling drawElementImage " +
+        "so page-side compositing stays available.",
+    );
+  }
+  // Whenever a compile-time gate cleared useDrawElement, restore page-side
+  // compositing — but ONLY when resolveConfig auto-disabled it because
+  // drawElement was going to run. An explicit enablePageSideCompositing:false
+  // from the programmatic API or HF_PAGE_SIDE_COMPOSITING=false never had the
+  // auto-disabled flag set and stays off.
+  if (!cfg.useDrawElement && cfg.pageSideCompositingAutoDisabled) {
+    cfg.enablePageSideCompositing = true;
+    cfg.pageSideCompositingAutoDisabled = false;
+  }
   const callerForced = cfg.forceScreenshot || (needsAlpha && !cfg.useDrawElement);
   const { forceScreenshot: hintForced } = applyRenderModeHints(callerForced, compiled, log);
   let forceScreenshot = hintForced;
