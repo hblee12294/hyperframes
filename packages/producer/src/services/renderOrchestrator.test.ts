@@ -28,6 +28,8 @@ import {
   MAX_TRANSIENT_CAPTURE_RETRIES,
   resolveCaptureForceScreenshotForPageSideCompositing,
   shouldDiscardProbeSessionForPageSideCompositing,
+  resolveInversionRetryPlan,
+  shouldPreferSingleWorkerDrawElement,
   shouldUseStreamingEncode,
 } from "./renderOrchestrator.js";
 import { ensureFrameWritten } from "./render/stages/captureHdrFrameShared.js";
@@ -1562,5 +1564,141 @@ describe("resolveDeviceScaleFactor", () => {
         outputResolution: "landscape",
       }),
     ).toThrow(/aspect ratio/);
+  });
+});
+
+describe("shouldPreferSingleWorkerDrawElement (DE priority inversion)", () => {
+  const eligible = {
+    workerCount: 5,
+    requestedWorkers: "auto" as const,
+    useDrawElement: true,
+    deCompileGate: undefined,
+    forceScreenshot: false,
+    outputFormat: "mp4" as const,
+    totalFrames: 2380,
+    minFrames: 900,
+    singleWorkerStreamingOk: true,
+    layeredOrEffectRoute: false,
+    supersampling: false,
+    probeDeGated: false,
+    experimentalParallelDeOptIn: false,
+  };
+
+  it("inverts an auto-resolved multi-worker render for an eligible long comp", () => {
+    expect(shouldPreferSingleWorkerDrawElement(eligible)).toBe(true);
+  });
+
+  it("honors explicitly requested workers", () => {
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, requestedWorkers: 3 })).toBe(false);
+  });
+
+  it("inverts for requestedWorkers undefined — the value production actually passes for auto", () => {
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, requestedWorkers: undefined })).toBe(
+      true,
+    );
+  });
+
+  it("skips comps routed to layered/HDR/shader paths (drawElement never runs there)", () => {
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, layeredOrEffectRoute: true })).toBe(
+      false,
+    );
+  });
+
+  it("skips supersampled renders (engine init-time DE gate)", () => {
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, supersampling: true })).toBe(false);
+  });
+
+  it("skips when the probe session already shows DE gated out", () => {
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, probeDeGated: true })).toBe(false);
+  });
+
+  it("honors the explicit experimental parallel-DE opt-in", () => {
+    expect(
+      shouldPreferSingleWorkerDrawElement({ ...eligible, experimentalParallelDeOptIn: true }),
+    ).toBe(false);
+  });
+
+  it("skips below the amortization threshold (measured crossover ~900 frames)", () => {
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, totalFrames: 360 })).toBe(false);
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, totalFrames: 900 })).toBe(true);
+  });
+
+  it("is disabled by minFrames <= 0 (HF_DE_SINGLE_MIN_FRAMES=0 kill switch)", () => {
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, minFrames: 0 })).toBe(false);
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, minFrames: -1 })).toBe(false);
+  });
+
+  it("requires drawElement to be enabled and ungated", () => {
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, useDrawElement: false })).toBe(false);
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, deCompileGate: "3d" })).toBe(false);
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, forceScreenshot: true })).toBe(false);
+  });
+
+  it("only applies to the benchmarked configuration (mp4 + streaming-eligible)", () => {
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, outputFormat: "webm" })).toBe(false);
+    expect(
+      shouldPreferSingleWorkerDrawElement({ ...eligible, singleWorkerStreamingOk: false }),
+    ).toBe(false);
+  });
+
+  it("is a no-op when workers already resolved to 1", () => {
+    expect(shouldPreferSingleWorkerDrawElement({ ...eligible, workerCount: 1 })).toBe(false);
+  });
+});
+
+describe("resolveInversionRetryPlan (self-verify retry rollback)", () => {
+  const cfg = { enableStreamingEncode: true, streamingEncodeMaxDurationSeconds: 240 };
+
+  it("returns null when the render was never inverted", () => {
+    expect(
+      resolveInversionRetryPlan({
+        deWorkerInversion: undefined,
+        preInversionWorkerCount: 5,
+        cfg,
+        outputFormat: "mp4",
+        durationSeconds: 80,
+      }),
+    ).toBe(null);
+    expect(
+      resolveInversionRetryPlan({
+        deWorkerInversion: "reverted",
+        preInversionWorkerCount: 5,
+        cfg,
+        outputFormat: "mp4",
+        durationSeconds: 80,
+      }),
+    ).toBe(null);
+  });
+
+  it("restores the pre-inversion worker count and routes multi-worker retries to disk", () => {
+    const plan = resolveInversionRetryPlan({
+      deWorkerInversion: "inverted",
+      preInversionWorkerCount: 5,
+      cfg,
+      outputFormat: "mp4",
+      durationSeconds: 80,
+    });
+    expect(plan).toEqual({
+      workerCount: 5,
+      // shouldUseStreamingEncode is workerCount===1-only — parallel retry
+      // goes through the disk path.
+      useStreamingEncode: false,
+      deWorkerInversion: "reverted",
+    });
+  });
+
+  it("keeps streaming when the pre-inversion resolution was already single-worker", () => {
+    const plan = resolveInversionRetryPlan({
+      deWorkerInversion: "inverted",
+      preInversionWorkerCount: 1,
+      cfg,
+      outputFormat: "mp4",
+      durationSeconds: 80,
+    });
+    expect(plan).toEqual({
+      workerCount: 1,
+      useStreamingEncode: true,
+      deWorkerInversion: "reverted",
+    });
   });
 });
