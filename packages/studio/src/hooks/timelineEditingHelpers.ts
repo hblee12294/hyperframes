@@ -12,7 +12,12 @@ import type { EditHistoryKind } from "../utils/editHistory";
 import type { TimelineZIndexReorderCommit } from "./useTimelineEditingTypes";
 
 function isHTMLElement(element: Element | null): element is HTMLElement {
-  return element != null && element instanceof HTMLElement;
+  if (!element) return false;
+  // Use the element's OWN realm's HTMLElement: timeline clips live in the preview
+  // iframe, and cross-realm `element instanceof HTMLElement` (main window) is
+  // always false — which silently dropped every timeline z-index commit.
+  const Ctor = element.ownerDocument?.defaultView?.HTMLElement ?? globalThis.HTMLElement;
+  return element instanceof Ctor;
 }
 
 /**
