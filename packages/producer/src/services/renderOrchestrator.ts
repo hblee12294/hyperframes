@@ -963,6 +963,13 @@ export function shouldUseStreamingEncode(
   if (outputFormat === "gif") return false;
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return false;
   if (durationSeconds > cfg.streamingEncodeMaxDurationSeconds) return false;
+  // SPIKE (HF_DE_PARALLEL_STREAM): allow multi-worker streaming for the
+  // interleaved drawElement produce experiment. Contiguous-chunk parallel
+  // streaming stalls (worker k+1's first frame waits for ALL of worker k's),
+  // so this only makes sense with the interleaved distribution the capture
+  // stage selects under the same flag. Explicit opt-in, unverified — do not
+  // ship default-on without threading guardFrame through onFrameBuffer.
+  if (process.env.HF_DE_PARALLEL_STREAM === "true") return true;
   return workerCount === 1;
 }
 
@@ -1706,7 +1713,10 @@ export async function executeRenderJob(
         probeSession !== null &&
         probeSession.captureMode !== "drawelement" &&
         !probeSession.deInitDeferred,
-      experimentalParallelDeOptIn: process.env.PRODUCER_EXPERIMENTAL_FAST_CAPTURE === "true",
+      experimentalParallelDeOptIn:
+        process.env.PRODUCER_EXPERIMENTAL_FAST_CAPTURE === "true" ||
+        // Verified parallel DE streaming (opt-in) wants its parallelism kept.
+        process.env.HF_DE_PARALLEL_STREAM === "true",
     });
     if (
       job.config.workers === undefined &&
@@ -1816,10 +1826,17 @@ export async function executeRenderJob(
     // disk path (png-sequence / over the streaming duration cap) and parallel
     // capture ship frames no drain verifies — route those renders to the
     // screenshot baseline unless drawElement was explicitly opted into.
+    // HF_DE_PARALLEL_STREAM: multi-worker STREAMING renders now carry the
+    // full drain-time self-verification (per-worker ground truth + the shared
+    // drain guard), so the confinement rule is satisfied and the parallel
+    // clamp does not apply. The disk path stays clamped.
+    const deParallelStreamVerified =
+      process.env.HF_DE_PARALLEL_STREAM === "true" && useStreamingEncode && workerCount > 1;
     if (
       cfg.useDrawElement &&
       process.env.PRODUCER_EXPERIMENTAL_FAST_CAPTURE !== "true" &&
-      (!useStreamingEncode || workerCount > 1)
+      (!useStreamingEncode || workerCount > 1) &&
+      !deParallelStreamVerified
     ) {
       cfg.useDrawElement = false;
       deClampReason = workerCount > 1 ? "parallel" : "disk_path";

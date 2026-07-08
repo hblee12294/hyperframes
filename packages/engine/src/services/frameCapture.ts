@@ -161,6 +161,11 @@ export interface CaptureSession {
    * worker-encode path (mirrors `lastFrameBuffer` on the screenshot path). Only set
    * when static-frame dedup is armed on the drawElement path. */
   lastEncodeResult?: Promise<Buffer>;
+  /** Frame index lastEncodeResult belongs to — static-dedup reuse must verify
+   * every frame in (lastEncodeResultFrame, i] is predicted-static (under the
+   * interleaved parallel stride the "previous" produced frame is i−N, and
+   * reusing it for frame i is only valid when the whole gap is static). */
+  lastEncodeResultFrame?: number;
   /** Per-render self-verification ground truth (ungated-release safety net):
    * K screenshot frames captured at init BEFORE the drawElement canvas is
    * injected (the only window where a page screenshot shows the live DOM, not
@@ -2657,9 +2662,28 @@ export async function captureFrameToBufferPipelined(
   // and skip the seek + drawElement + encode entirely. Same predicate as the serial
   // path; clip-cut frames are excluded from staticFrames so they always capture.
   if (session.staticFrames?.has(frameIndex) && session.lastEncodeResult) {
-    session.staticDedupCount = (session.staticDedupCount ?? 0) + 1;
-    session.capturePerf.frames += 1;
-    return { encodeResult: session.lastEncodeResult, captureTimeMs: Date.now() - startTime };
+    // Reuse is valid only when EVERY frame in (lastEncodeResultFrame, i] is
+    // predicted-static — then all of them (and the reused buffer) share the
+    // same pixels. Sequential capture reduces to has(i) (gap = {i}); the
+    // interleaved parallel stride makes the gap N frames wide.
+    const lastIdx = session.lastEncodeResultFrame ?? frameIndex - 1;
+    let gapStatic = true;
+    for (let j = lastIdx + 1; j <= frameIndex; j++) {
+      if (!session.staticFrames.has(j)) {
+        gapStatic = false;
+        break;
+      }
+    }
+    if (gapStatic) {
+      session.staticDedupCount = (session.staticDedupCount ?? 0) + 1;
+      session.capturePerf.frames += 1;
+      // Advance the watermark on reuse too, not just on real captures — the
+      // gap-check above starts from lastEncodeResultFrame, so leaving it
+      // pinned to the last REAL capture makes every consecutive reuse rescan
+      // an ever-widening window instead of just the one new frame (review).
+      session.lastEncodeResultFrame = frameIndex;
+      return { encodeResult: session.lastEncodeResult, captureTimeMs: Date.now() - startTime };
+    }
   }
 
   try {
@@ -2694,7 +2718,10 @@ export async function captureFrameToBufferPipelined(
         session.capturePerf.frameMs.push(boundaryMs);
       }
       const boundaryResult = Promise.resolve(buffer);
-      if (session.staticFrames) session.lastEncodeResult = boundaryResult;
+      if (session.staticFrames) {
+        session.lastEncodeResult = boundaryResult;
+        session.lastEncodeResultFrame = frameIndex;
+      }
       return { encodeResult: boundaryResult, captureTimeMs: Date.now() - startTime };
     }
 
@@ -2721,7 +2748,10 @@ export async function captureFrameToBufferPipelined(
     session.capturePerf.frameMs.push(captureTimeMs);
 
     // Task B: retain this encode result so a following static frame can reuse it.
-    if (session.staticFrames) session.lastEncodeResult = encodeResult;
+    if (session.staticFrames) {
+      session.lastEncodeResult = encodeResult;
+      session.lastEncodeResultFrame = frameIndex;
+    }
 
     return { encodeResult, captureTimeMs };
   } catch (captureError) {
