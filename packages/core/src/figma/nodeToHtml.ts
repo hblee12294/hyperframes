@@ -162,7 +162,12 @@ interface RenderContext {
 }
 
 function uniqueSlug(ctx: RenderContext, name: string): string {
-  const base = slugify(name);
+  const raw = slugify(name);
+  // A digit-leading id ("3D Object" → "3d-object") is valid HTML but not a
+  // valid CSS selector — querySelector("#3d-object") throws, which breaks
+  // GSAP targeting and figma-motion translation. Prefix so ids stay
+  // selector-safe.
+  const base = /^[0-9]/.test(raw) ? `n${raw}` : raw;
   let slug = base;
   let n = 2;
   while (ctx.usedSlugs.has(slug)) slug = `${base}-${n++}`;

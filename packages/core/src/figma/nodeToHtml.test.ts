@@ -84,6 +84,24 @@ describe("nodeToHtml", () => {
     expect(out.html).not.toContain("left: 520px");
   });
 
+  it("prefixes digit-leading slugs so ids stay CSS-selector-safe", () => {
+    const out = nodeToHtml(
+      frame([
+        {
+          id: "1:2",
+          name: "3D Object - Headphones",
+          type: "RECTANGLE",
+          absoluteBoundingBox: BOX(120, 220, 100, 40),
+          fills: [SOLID_BLUE],
+        },
+      ]),
+      { resolved: [], unresolved: [] },
+    );
+    // "#3d-object-headphones" would throw in querySelector/GSAP targeting
+    expect(out.html).toContain('id="n3d-object-headphones"');
+    expect(out.html).not.toContain('id="3d-object-headphones"');
+  });
+
   it("emits var() with literal fallback for resolved bindings", () => {
     const out = nodeToHtml(
       frame([
