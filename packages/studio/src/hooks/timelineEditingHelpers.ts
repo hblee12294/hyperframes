@@ -190,7 +190,7 @@ export function patchIframeDomTiming(
   }
 }
 
-export function postRootDurationToPreview(
+function postRootDurationToPreview(
   iframe: HTMLIFrameElement | null,
   durationSeconds: number,
 ): void {

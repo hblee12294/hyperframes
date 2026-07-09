@@ -230,9 +230,7 @@ export const Timeline = memo(function Timeline({
     setRangeSelectionRef,
   });
 
-  // basisDuration drives the zoom (committed, no live preview); effectiveDuration
-  // adds the active drag/resize preview so the ruler/width follow a past-end drag.
-  // See timelineLayout for why the split prevents jump-during-extend.
+  // basis drives the zoom (committed); effective adds the live preview (see timelineLayout).
   const basisDuration = useMemo(
     () =>
       computeTimelineBasisDuration(
