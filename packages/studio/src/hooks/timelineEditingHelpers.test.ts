@@ -39,7 +39,6 @@ describe("applyTimelineStackingReorder", () => {
 
     applyTimelineStackingReorder({
       element: el({ id: "chip", tag: "div" }),
-      targetTrack: 0,
       stackingReorder: {
         contextKey: "scene",
         placement: { type: "above", layerId: "layer:scene:x" },
@@ -76,7 +75,6 @@ describe("applyTimelineStackingReorder", () => {
 
     applyTimelineStackingReorder({
       element: el({ id: "track", tag: "audio" }),
-      targetTrack: 0,
       stackingReorder: {
         contextKey: "main",
         placement: { type: "above", layerId: "layer:main:x" },

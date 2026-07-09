@@ -33,7 +33,6 @@ function isHTMLElement(element: Element | null): element is HTMLElement {
 // fallow-ignore-next-line complexity
 export function applyTimelineStackingReorder(input: {
   element: TimelineElement;
-  targetTrack: number;
   stackingReorder: TimelineStackingReorderIntent | null | undefined;
   timelineElements: readonly TimelineElement[];
   iframe: HTMLIFrameElement | null;
@@ -89,12 +88,7 @@ export function applyTimelineStackingReorder(input: {
   }
 
   if (commitEntries.length === 0) return Promise.resolve();
-  const persisted = input.commit?.(commitEntries) ?? Promise.resolve();
-  const store = usePlayerStore.getState();
-  for (const entry of commitEntries) {
-    store.updateElement(entry.key, { zIndex: entry.zIndex, hasExplicitZIndex: true });
-  }
-  return persisted;
+  return input.commit?.(commitEntries) ?? Promise.resolve();
 }
 
 /**

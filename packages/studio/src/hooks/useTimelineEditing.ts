@@ -136,7 +136,6 @@ export function useTimelineEditing({
 
       const reorderDone = applyTimelineStackingReorder({
         element,
-        targetTrack: updates.track,
         stackingReorder: updates.stackingReorder,
         timelineElements,
         iframe: previewIframeRef.current,

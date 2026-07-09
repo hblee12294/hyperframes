@@ -493,6 +493,136 @@ describe("useTimelineEditing timeline z-index reorder", () => {
     unmount();
   });
 
+  it("rejects and rolls back DOM and store z-index changes when a reorder save fails", async () => {
+    const iframe = createPreviewIframe([
+      { id: "front", track: 0, style: "position: relative; z-index: 7" },
+      { id: "back", track: 1, style: "position: static" },
+    ]);
+    const front = timelineElement({ id: "front", track: 0, zIndex: 7 });
+    const back = timelineElement({ id: "back", track: 1, zIndex: 0 });
+    usePlayerStore.getState().setElements([
+      { ...front, hasExplicitZIndex: true },
+      { ...back, hasExplicitZIndex: false },
+    ]);
+    const saveError = new Error("save failed");
+    const commitPositionPatchToHtml = vi
+      .fn<(...args: unknown[]) => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(saveError);
+    const { move, unmount } = renderTimelineEditingHookWithLifecycle({
+      timelineElements: [front, back],
+      iframe,
+      commitPositionPatchToHtml,
+    });
+    const doc = iframe.contentDocument;
+    if (!doc) throw new Error("Expected iframe document");
+    const frontElement = doc.getElementById("front") as HTMLElement | null;
+    const backElement = doc.getElementById("back") as HTMLElement | null;
+    if (!frontElement || !backElement) throw new Error("Expected reordered elements");
+
+    let rejection: unknown;
+    await act(async () => {
+      try {
+        await move(back, {
+          start: back.start,
+          track: back.track,
+          stackingReorder: {
+            contextKey: "root",
+            placement: { type: "above", layerId: "front" },
+            zIndexChanges: [
+              { key: "front", zIndex: 2 },
+              { key: "back", zIndex: 5 },
+            ],
+          },
+        });
+      } catch (error) {
+        rejection = error;
+      }
+      await flushAsyncWork();
+    });
+
+    expect(rejection).toBe(saveError);
+    expect(frontElement.style.zIndex).toBe("7");
+    expect(frontElement.style.position).toBe("relative");
+    expect(backElement.style.zIndex).toBe("");
+    expect(backElement.style.position).toBe("static");
+    const storeEntries = usePlayerStore.getState().elements;
+    expect(storeEntries.find((entry) => entry.id === "front")).toMatchObject({
+      zIndex: 7,
+      hasExplicitZIndex: true,
+    });
+    expect(storeEntries.find((entry) => entry.id === "back")).toMatchObject({
+      zIndex: 0,
+      hasExplicitZIndex: false,
+    });
+
+    unmount();
+  });
+
+  it("waits for every lifecycle z-index save before resolving a reorder", async () => {
+    const iframe = createPreviewIframe([
+      { id: "front", track: 0, style: "position: relative; z-index: 1" },
+      { id: "back", track: 1, style: "position: relative; z-index: 0" },
+    ]);
+    const front = timelineElement({ id: "front", track: 0, zIndex: 1 });
+    const back = timelineElement({ id: "back", track: 1, zIndex: 0 });
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstSave = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondSave = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const commitPositionPatchToHtml = vi
+      .fn<(...args: unknown[]) => Promise<void>>()
+      .mockReturnValueOnce(firstSave)
+      .mockReturnValueOnce(secondSave);
+    const { move, unmount } = renderTimelineEditingHookWithLifecycle({
+      timelineElements: [front, back],
+      iframe,
+      commitPositionPatchToHtml,
+    });
+    let settled = false;
+
+    let movePromise!: Promise<void>;
+    await act(async () => {
+      movePromise = move(back, {
+        start: back.start,
+        track: back.track,
+        stackingReorder: {
+          contextKey: "root",
+          placement: { type: "above", layerId: "front" },
+          zIndexChanges: [
+            { key: "front", zIndex: 2 },
+            { key: "back", zIndex: 3 },
+          ],
+        },
+      }).then(() => {
+        settled = true;
+      });
+      await flushAsyncWork();
+    });
+
+    expect(commitPositionPatchToHtml).toHaveBeenCalledTimes(2);
+    expect(settled).toBe(false);
+
+    await act(async () => {
+      releaseFirst();
+      await flushAsyncWork();
+    });
+    expect(settled).toBe(false);
+
+    await act(async () => {
+      releaseSecond();
+      await movePromise;
+      await flushAsyncWork();
+    });
+    expect(settled).toBe(true);
+
+    unmount();
+  });
+
   it("keeps horizontal-only drag on the timing and GSAP shift path without z-index writes", async () => {
     const iframe = createPreviewIframe([{ id: "clip", track: 0 }]);
     const clip = timelineElement({ id: "clip", track: 0, zIndex: 0 });

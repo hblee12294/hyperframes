@@ -20,6 +20,7 @@ export type TimelineZIndexReorderCommit = (
     selector?: string;
     selectorIndex?: number;
     sourceFile: string;
+    key?: string;
   }>,
 ) => Promise<void>;
 
