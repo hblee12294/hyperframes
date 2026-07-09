@@ -23,7 +23,7 @@
 // video, frames only). Durations come from STORYBOARD (audio sync-durations
 // writes them), NOT from here; this file carries only media PATHS, keyed by
 // frame number:
-//   { "bgm":   { "path": "assets/bgm/x.mp3", "volume": 0.8 } | null,
+//   { "bgm":   { "path": "assets/bgm/x.mp3", "volume": 0.12 } | null,
 //     "voices":[ { "frame": 3, "path": "assets/voice/03.wav" } ],
 //     "sfx":   [ { "frame": 3, "file": "assets/sfx/x.mp3", "offset_s": 0,
 //                  "duration_s": 1.0, "volume": 0.35 } ] }
@@ -388,7 +388,9 @@ if (audio.bgm?.path) {
         `bgm is ${cov.dur?.toFixed?.(1) ?? "?"}s (< ${TOTAL}s) and could not be extended (${cov.reason}) — the tail will be silent; install ffmpeg`,
       );
     }
-    const vol = audio.bgm.volume != null ? audio.bgm.volume : voiceCount > 0 ? 0.8 : 0.9;
+    // An explicit volume from audio_meta always wins. Otherwise BGM under
+    // narration is a bed (0.12 ≈ -18 dB); a silent film sits it forward at 0.9.
+    const vol = audio.bgm.volume != null ? audio.bgm.volume : voiceCount > 0 ? 0.12 : 0.9;
     body.push(
       `      <!-- BGM -->`,
       `      <audio`,
