@@ -131,6 +131,10 @@ export interface CheckAuditDriver {
   findAmbiguousSelectors(selectors: string[]): Promise<AnchoredLayoutIssue[]>;
   seek(time: number): Promise<void>;
   collectLayout(time: number, tolerance: number): Promise<AnchoredLayoutIssue[]>;
+  /** Frozen-sweep guard (#U10): an opaque per-sample geometry+opacity
+   * fingerprint of the current seeked state, for detecting a timeline that
+   * never advances under seek. See layout-audit.browser.js. */
+  collectLayoutGeometry(): Promise<string>;
   collectGeometryCandidates(
     time: number,
     request: GeometryCandidateRequest,

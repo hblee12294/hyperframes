@@ -529,7 +529,7 @@ export function createInspectCommand(commandName: "inspect" | "layout") {
           );
         }
         const allIssues = collapseStatic
-          ? collapseStaticLayoutIssues(result.rawIssues)
+          ? collapseStaticLayoutIssues(result.rawIssues, result.samples.length)
           : result.rawIssues;
         const limited = limitLayoutIssues(allIssues, maxIssues);
         const summary = summarizeLayoutIssues(allIssues);

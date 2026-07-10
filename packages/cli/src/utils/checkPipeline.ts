@@ -186,6 +186,8 @@ interface GridSamples {
   contrastEntries: ContrastAuditEntry[];
   screenshots: CheckScreenshot[];
   contrastMs: number;
+  /** One geometry+opacity fingerprint per layout sample (#U10 frozen-sweep guard). */
+  geometrySignatures: string[];
 }
 
 interface GeometrySeen {
@@ -356,6 +358,7 @@ async function collectGridSamples(
     contrastEntries: [],
     screenshots: [],
     contrastMs: 0,
+    geometrySignatures: [],
   };
   for (const time of mergeSampleTimes(grid.layoutSamples, motion.times)) {
     await driver.seek(time);
@@ -367,6 +370,7 @@ async function collectGridSamples(
       const layoutIssues = await driver.collectLayout(time, options.tolerance);
       collected.layoutIssues.push(...layoutIssues);
       issuesAtTime.push(...layoutIssues);
+      collected.geometrySignatures.push(await driver.collectLayoutGeometry());
     }
     if (canvas) {
       const geometryIssues = await collectGeometryAt(
@@ -401,6 +405,55 @@ async function collectGridSamples(
   return collected;
 }
 
+// Frozen-sweep guard (#U10): compositions this short can legitimately hold a
+// single static frame the whole time (a title card) — never flag those.
+const SWEEP_STATIC_MIN_DURATION_SEC = 3;
+const ZERO_LAYOUT_RECT: LayoutRect = {
+  left: 0,
+  top: 0,
+  right: 0,
+  bottom: 0,
+  width: 0,
+  height: 0,
+};
+
+/**
+ * Frozen-sweep guard (#U10): if every layout-grid sample produced the exact
+ * same geometry+opacity fingerprint (see layout-audit.browser.js), the seek
+ * never actually advanced the composition's timeline — every other green
+ * verdict from this run is meaningless, not just a missed defect. Skips
+ * short (<3s) compositions, single-sample runs (nothing to compare), and
+ * runs where a `motion_frozen` finding already reported the same underlying
+ * symptom (no double-reporting the one thing that's wrong).
+ */
+function detectSweepStatic(
+  duration: number,
+  geometrySignatures: string[],
+  motionIssues: AnchoredLayoutIssue[],
+): AnchoredLayoutIssue[] {
+  if (duration < SWEEP_STATIC_MIN_DURATION_SEC) return [];
+  if (geometrySignatures.length < 2) return [];
+  if (motionIssues.some((issue) => issue.code === "motion_frozen")) return [];
+  const [first, ...rest] = geometrySignatures;
+  if (!first || rest.some((signature) => signature !== first)) return [];
+  return [
+    {
+      code: "sweep_static",
+      severity: "error",
+      time: 0,
+      selector: "[data-composition-id]",
+      dataAttributes: {},
+      sourceFile: "index.html",
+      bbox: ZERO_BBOX,
+      rect: ZERO_LAYOUT_RECT,
+      message:
+        "Timeline did not advance under seek; every green verdict on this run is unreliable.",
+      fixHint:
+        "Confirm the composition seeks a paused GSAP/CSS timeline under `data-*` timing attributes rather than only autoplaying.",
+    },
+  ];
+}
+
 /** Error-severity findings with real geometry become labeled overview boxes.
  * Contrast failures are annotated separately by the driver itself, since
  * they're only known once contrast measurement for this sample completes. */
@@ -431,6 +484,11 @@ export async function runAuditGrid(
     );
     motionIssues = await driver.anchorMotionIssues(evaluated);
   }
+  const sweepFindings = detectSweepStatic(
+    grid.duration,
+    collected.geometrySignatures,
+    motionIssues,
+  );
   const contrast = buildContrastResults(collected.contrastEntries);
   return {
     duration: grid.duration,
@@ -438,7 +496,7 @@ export async function runAuditGrid(
     transitionSamples: grid.transitionSamples,
     transitionSamplesDropped: grid.transitionSamplesDropped,
     runtimeFindings: [],
-    layoutIssues: collected.layoutIssues,
+    layoutIssues: [...collected.layoutIssues, ...sweepFindings],
     motionIssues,
     motionSampleCount: collected.motionFrames.length,
     contrastSamples: grid.contrastSamples,
@@ -719,7 +777,7 @@ function shapeLayoutSection(
   browser: CheckBrowserResult,
   options: CheckOptions,
 ): CheckReport["layout"] {
-  const shaped = shapeLayoutFindings(issues, options);
+  const shaped = shapeLayoutFindings(issues, options, browser.layoutSamples.length);
   return {
     ...section(shaped.findings),
     duration: browser.duration,
@@ -735,9 +793,12 @@ function shapeLayoutSection(
 function shapeLayoutFindings(
   issues: AnchoredLayoutIssue[],
   options: CheckOptions,
+  totalSampleCount?: number,
 ): { findings: AnchoredLayoutIssue[]; totalIssueCount: number; truncated: boolean } {
   const deduped = dedupeLayoutIssues(issues);
-  const all = options.collapseStatic ? collapseStaticLayoutIssues(deduped) : deduped;
+  const all = options.collapseStatic
+    ? collapseStaticLayoutIssues(deduped, totalSampleCount)
+    : deduped;
   const limited = limitLayoutIssues(all, options.maxIssues);
   return {
     findings: limited.issues.map(ensureAnchoredLayoutIssue),

@@ -2,6 +2,52 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createConsoleLogger, defaultLogger } from "./logger.js";
 import type { LogLevel, ProducerLogger } from "./logger.js";
 
+// `isLevelEnabled` is optional on ProducerLogger, so every call site guards
+// it with `?.`; pulled out once so the loops below stay single-branch.
+function isLevelEnabledSafe(
+  log: Pick<ProducerLogger, "isLevelEnabled">,
+  level: LogLevel,
+): boolean | undefined {
+  return log.isLevelEnabled?.(level);
+}
+
+// Shared by the isLevelEnabled matrix cases below: assert a threshold's
+// enabled levels report true and its disabled levels report false.
+function assertLevelEnabledMatrix(
+  log: Pick<ProducerLogger, "isLevelEnabled">,
+  enabled: ReadonlyArray<LogLevel>,
+  disabled: ReadonlyArray<LogLevel>,
+): void {
+  for (const lvl of enabled) {
+    expect(isLevelEnabledSafe(log, lvl)).toBe(true);
+  }
+  for (const lvl of disabled) {
+    expect(isLevelEnabledSafe(log, lvl)).toBe(false);
+  }
+}
+
+// The `isLevelEnabled?.("debug") ?? true` call-site gate pattern itself,
+// isolated so runGatedDebugLoop's own branch count stays at "loop + if".
+function isDebugGated(log: Pick<ProducerLogger, "isLevelEnabled">): boolean {
+  return log.isLevelEnabled?.("debug") ?? true;
+}
+
+// Shared by the call-site gate cases below: run the `isLevelEnabled?.("debug")
+// ?? true` pattern callers use to skip expensive meta construction, the
+// exact number of times the test needs, so each test asserts only the
+// pattern's outcome (buildCount / logged calls) and not the loop mechanics.
+function runGatedDebugLoop(
+  log: Pick<ProducerLogger, "debug" | "isLevelEnabled">,
+  iterations: number,
+  buildMeta: () => Record<string, unknown>,
+): void {
+  for (let i = 0; i < iterations; i++) {
+    if (isDebugGated(log)) {
+      log.debug("evt", buildMeta());
+    }
+  }
+}
+
 describe("createConsoleLogger", () => {
   // We capture calls to console.{log,warn,error} via `vi.fn` so we can
   // assert what would have been printed without polluting test output.
@@ -194,12 +240,7 @@ describe("createConsoleLogger", () => {
     for (const { threshold, enabled, disabled } of cases) {
       it(`level=${threshold} reports enabled levels correctly`, () => {
         const log = createConsoleLogger(threshold);
-        for (const lvl of enabled) {
-          expect(log.isLevelEnabled?.(lvl)).toBe(true);
-        }
-        for (const lvl of disabled) {
-          expect(log.isLevelEnabled?.(lvl)).toBe(false);
-        }
+        assertLevelEnabledMatrix(log, enabled, disabled);
       });
     }
 
@@ -214,11 +255,7 @@ describe("createConsoleLogger", () => {
         return { expensive: true };
       };
 
-      for (let i = 0; i < 100; i++) {
-        if (log.isLevelEnabled?.("debug") ?? true) {
-          log.debug("hot-loop", buildMeta());
-        }
-      }
+      runGatedDebugLoop(log, 100, buildMeta);
 
       expect(buildCount).toBe(0);
       expect(errorSpy.mock.calls.length).toBe(0);
@@ -232,11 +269,7 @@ describe("createConsoleLogger", () => {
         return { iter: buildCount };
       };
 
-      for (let i = 0; i < 5; i++) {
-        if (log.isLevelEnabled?.("debug") ?? true) {
-          log.debug("loop", buildMeta());
-        }
-      }
+      runGatedDebugLoop(log, 5, buildMeta);
 
       expect(buildCount).toBe(5);
       expect(errorSpy.mock.calls.length).toBe(5);
@@ -260,11 +293,7 @@ describe("createConsoleLogger", () => {
         return { i: buildCount };
       };
 
-      for (let i = 0; i < 3; i++) {
-        if (customLog.isLevelEnabled?.("debug") ?? true) {
-          customLog.debug("evt", buildMeta());
-        }
-      }
+      runGatedDebugLoop(customLog, 3, buildMeta);
 
       expect(buildCount).toBe(3);
       expect(calls).toHaveLength(3);

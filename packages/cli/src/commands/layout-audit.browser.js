@@ -627,9 +627,12 @@
     const area = intersectionArea(a.rect, b.rect);
     if (area <= Math.min(rectArea(a.rect), rectArea(b.rect)) * 0.2) return null;
     return {
-      // Warning, not error: must not fail the exit code (ok = errorCount === 0)
-      // for compositions that intentionally layer text. Re-promote once the
-      // data-layout-allow-overlap opt-out is widely adopted.
+      // Warning at the per-sample level: a single-sample overlap is usually an
+      // entrance/exit transient (two blocks crossing mid-animation), not a real
+      // collision. `collapseStaticLayoutIssues` (utils/layoutAudit.ts) re-promotes
+      // this to error once the SAME overlap is held across >= 2 adjacent samples
+      // (or ~500ms of timeline) — a persistence-tiered replacement for the old
+      // "re-promote once data-layout-allow-overlap is widely adopted" plan (#U10).
       code: "content_overlap",
       severity: "warning",
       time,
@@ -728,37 +731,66 @@
     return hit;
   }
 
+  const OCCLUSION_PROBE_Y_FRACTIONS = [0.25, 0.5, 0.75];
+  const OCCLUSION_PROBE_X_FRACTIONS = [0.03, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 0.97];
+  const OCCLUSION_GRID_POINTS =
+    OCCLUSION_PROBE_Y_FRACTIONS.length * OCCLUSION_PROBE_X_FRACTIONS.length;
+
+  // Short, atomic text (a label/button/word, no whitespace) reads as a single
+  // unit — ANY covered probe point changes what it says, so flag at any hit
+  // (the pre-#U10 behaviour). Longer prose survives a nibbled edge; only flag
+  // once a real share of it is covered — see `occludedTextIssue`.
+  const ATOMIC_LABEL_MAX_CHARS = 16;
+  const PROSE_COVERAGE_FLOOR = 0.15;
+
+  function isAtomicLabel(text) {
+    return text.length > 0 && text.length <= ATOMIC_LABEL_MAX_CHARS && !/\s/.test(text);
+  }
+
   // Sweep a grid across the text box (three rows, not just the mid-line, so
-  // overlays covering only part of a multi-line block are caught) and return
-  // the first opaque element painted over any sample point.
-  function firstOccluder(element, textRect) {
-    for (const yFraction of [0.25, 0.5, 0.75]) {
+  // overlays covering only part of a multi-line block are caught). Unlike a
+  // first-hit scan, this keeps sampling every point so it can report what
+  // fraction of the box is actually covered — a corner nibble on a paragraph
+  // reads very differently from a label buried under an overlay. Still
+  // returns the first opaque element found, for `containerSelector`.
+  function occlusionCoverage(element, textRect) {
+    let occluder = null;
+    let hits = 0;
+    for (const yFraction of OCCLUSION_PROBE_Y_FRACTIONS) {
       const y = textRect.top + textRect.height * yFraction;
-      for (const xFraction of [0.03, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 0.97]) {
-        const occluder = occluderAt(element, textRect.left + textRect.width * xFraction, y);
-        if (occluder) return occluder;
+      for (const xFraction of OCCLUSION_PROBE_X_FRACTIONS) {
+        const hit = occluderAt(element, textRect.left + textRect.width * xFraction, y);
+        if (!hit) continue;
+        hits += 1;
+        if (!occluder) occluder = hit;
       }
     }
-    return null;
+    return { occluder, coveredFraction: round(hits / OCCLUSION_GRID_POINTS) };
   }
 
   // Catches the blind spot the overflow checks miss: text that fits its box
-  // perfectly but is covered by a later sibling/overlay.
+  // perfectly but is covered by a later sibling/overlay. An atomic label
+  // (short, no whitespace) flags at any coverage; ordinary prose only flags
+  // once coveredFraction clears PROSE_COVERAGE_FLOOR, since a sliver of edge
+  // cover on a paragraph is usually a styling artifact, not a reading defect.
   function occludedTextIssue(element, time) {
     if (hasAllowOcclusionFlag(element)) return null;
     const textRect = textRectFor(element);
     if (!textRect) return null;
-    const occluder = firstOccluder(element, textRect);
+    const text = textContentFor(element);
+    const { occluder, coveredFraction } = occlusionCoverage(element, textRect);
     if (!occluder) return null;
+    if (!isAtomicLabel(text) && coveredFraction < PROSE_COVERAGE_FLOOR) return null;
     return {
       code: "text_occluded",
       severity: "error",
       time,
       selector: selectorFor(element),
       containerSelector: selectorFor(occluder),
-      text: textContentFor(element),
+      text,
       message: "Text is hidden beneath an opaque element.",
       rect: textRect,
+      coveredFraction,
       fixHint:
         "Give the text its own zone, raise its stacking order above the covering element, or mark intentional layering with data-layout-allow-occlusion.",
     };
@@ -854,5 +886,29 @@
     issues.push(...containerOverflowIssues(root, time, tolerance));
     issues.push(...contentOverlapIssues(root, time));
     return issues;
+  };
+
+  // Frozen-sweep guard (#U10, checkPipeline.ts): a compact per-sample
+  // fingerprint of every visible element's box + opacity, in DOM order. Node
+  // calls this once per seeked grid point and compares the strings across the
+  // whole run — if every sample produces the identical string, the seek never
+  // actually moved anything and the whole audit run is unreliable. Deliberately
+  // a single opaque string (not a structured array) since Node only ever needs
+  // equality, not per-element diffing.
+  window.__hyperframesLayoutGeometry = function collectLayoutGeometry() {
+    const root =
+      document.querySelector("[data-composition-id][data-width][data-height]") ||
+      document.querySelector("[data-composition-id]") ||
+      document.body;
+    const elements = Array.from(root.querySelectorAll("*")).filter((element) =>
+      isVisibleElement(element),
+    );
+    return elements
+      .map((element) => {
+        const rect = toRect(element.getBoundingClientRect());
+        const opacity = round(opacityChain(element));
+        return `${rect.left},${rect.top},${rect.width},${rect.height},${opacity}`;
+      })
+      .join("|");
   };
 })();

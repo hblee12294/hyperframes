@@ -256,6 +256,7 @@ function createPageDriver(page: Page, setTime: (time: number) => void): CheckAud
       await seekCompositionTimeline(page, time, SEEK_OPTIONS);
     },
     collectLayout: (time, tolerance) => collectLayout(page, time, tolerance),
+    collectLayoutGeometry: () => collectLayoutGeometry(page),
     collectGeometryCandidates: (time, request) => collectGeometryCandidates(page, time, request),
     collectMotionFrame: (time, selectors, scopes) =>
       collectMotionFrame(page, time, selectors, scopes),
@@ -366,6 +367,15 @@ async function collectLayout(
     { time, tolerance },
   );
   return anchorLayoutIssues(page, raw.flatMap(parseLayoutIssue));
+}
+
+async function collectLayoutGeometry(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const geometry = Reflect.get(window, "__hyperframesLayoutGeometry");
+    if (typeof geometry !== "function") return "";
+    const result = Reflect.apply(geometry, window, []);
+    return typeof result === "string" ? result : "";
+  });
 }
 
 async function collectGeometryCandidates(
@@ -814,6 +824,8 @@ function assignOptionalLayoutFields(issue: LayoutIssue, value: Record<string, un
   if (containerRect) issue.containerRect = containerRect;
   const overflow = parseOverflow(Reflect.get(value, "overflow"));
   if (overflow) issue.overflow = overflow;
+  const coveredFraction = numberValue(value, "coveredFraction");
+  if (coveredFraction !== null) issue.coveredFraction = coveredFraction;
 }
 
 function recordField(value: unknown, key: string): Record<string, unknown> | null {

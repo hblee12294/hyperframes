@@ -108,10 +108,14 @@ function anchor(selector: string, time: number): CheckAnchor {
   };
 }
 
-function layoutIssue(severity: "error" | "warning" | "info" = "error"): AnchoredLayoutIssue {
+function layoutIssue(
+  severity: "error" | "warning" | "info" = "error",
+  overrides: { time?: number; code?: AnchoredLayoutIssue["code"] } = {},
+): AnchoredLayoutIssue {
+  const time = overrides.time ?? 0.5;
   return {
-    ...anchor("#hero", 0.5),
-    code: severity === "warning" ? "content_overlap" : "clipped_text",
+    ...anchor("#hero", time),
+    code: overrides.code ?? (severity === "warning" ? "content_overlap" : "clipped_text"),
     severity,
     text: "Hero",
     message: severity === "warning" ? "Text may overlap." : "Text is clipped.",
@@ -133,6 +137,10 @@ function contrastEntry(overrides: Partial<ContrastAuditEntry> = {}): ContrastAud
 }
 
 function fakeDriver(overrides: Partial<CheckAuditDriver> = {}): CheckAuditDriver {
+  // A distinct string per call so the frozen-sweep guard (#U10) never fires
+  // by accident in unrelated scenarios — tests that want it force a constant
+  // via `collectLayoutGeometry: vi.fn(async () => "same")`.
+  let geometryCallCount = 0;
   return {
     initialize: vi.fn(async (_contrast: boolean) => undefined),
     getDuration: vi.fn(async () => 9),
@@ -141,6 +149,7 @@ function fakeDriver(overrides: Partial<CheckAuditDriver> = {}): CheckAuditDriver
     findAmbiguousSelectors: vi.fn(async (_selectors: string[]) => []),
     seek: vi.fn(async (_time: number) => undefined),
     collectLayout: vi.fn(async (_time: number, _tolerance: number) => []),
+    collectLayoutGeometry: vi.fn(async () => `geometry-${geometryCallCount++}`),
     collectGeometryCandidates: vi.fn(async () => []),
     collectMotionFrame: vi.fn(async (time: number) => ({ time, data: {}, liveness: {} })),
     anchorMotionIssues: vi.fn(async (issues: LayoutIssue[]) =>
@@ -883,7 +892,9 @@ describe("check pipeline", () => {
 
   it("preserves a resolving selector, source file, identity, bbox, and sample time", async () => {
     const { report } = await runScenario(
-      fakeDriver({ collectLayout: vi.fn(async () => [layoutIssue()]) }),
+      fakeDriver({
+        collectLayout: vi.fn(async (time: number) => [layoutIssue("error", { time })]),
+      }),
     );
     expect(report.layout.findings[0]).toMatchObject({
       selector: "#hero",
@@ -896,7 +907,9 @@ describe("check pipeline", () => {
 
   it("reports layout and runtime errors from one browser session", async () => {
     const { report, browser } = await runScenario(
-      fakeDriver({ collectLayout: vi.fn(async () => [layoutIssue()]) }),
+      fakeDriver({
+        collectLayout: vi.fn(async (time: number) => [layoutIssue("error", { time })]),
+      }),
       {},
       { runtime: [runtimeError()] },
     );
@@ -961,7 +974,9 @@ describe("check pipeline", () => {
       ) => ["snapshots/finding-00-clipped_text.png"],
     );
     const { report } = await runScenario(
-      fakeDriver({ collectLayout: vi.fn(async () => [layoutIssue()]) }),
+      fakeDriver({
+        collectLayout: vi.fn(async (time: number) => [layoutIssue("error", { time })]),
+      }),
       { snapshots: true },
       { captureFindingCrops: capture },
     );
@@ -978,7 +993,9 @@ describe("check pipeline", () => {
 
     const withoutSnapshots = vi.fn(async () => ["unused.png"]);
     await runScenario(
-      fakeDriver({ collectLayout: vi.fn(async () => [layoutIssue()]) }),
+      fakeDriver({
+        collectLayout: vi.fn(async (time: number) => [layoutIssue("error", { time })]),
+      }),
       { snapshots: false },
       { captureFindingCrops: withoutSnapshots },
     );
@@ -986,7 +1003,15 @@ describe("check pipeline", () => {
 
     const noErrors = vi.fn(async () => ["unused.png"]);
     await runScenario(
-      fakeDriver({ collectLayout: vi.fn(async () => [layoutIssue("warning")]) }),
+      fakeDriver({
+        collectLayout: vi.fn(
+          async (time: number) =>
+            // container_overflow, not content_overlap: this fixture wants a plain
+            // warning-severity finding held across the whole run, unaffected by
+            // content_overlap's #U10 held-duration re-promotion to error.
+            [layoutIssue("warning", { time, code: "container_overflow" })],
+        ),
+      }),
       { snapshots: true },
       { captureFindingCrops: noErrors },
     );
@@ -995,7 +1020,15 @@ describe("check pipeline", () => {
 
   it("--strict flips a warnings-only result from exit 0 to exit 1", async () => {
     const warningDriver = () =>
-      fakeDriver({ collectLayout: vi.fn(async () => [layoutIssue("warning")]) });
+      fakeDriver({
+        collectLayout: vi.fn(
+          async (time: number) =>
+            // container_overflow, not content_overlap: this fixture wants a plain
+            // warning-severity finding held across the whole run, unaffected by
+            // content_overlap's #U10 held-duration re-promotion to error.
+            [layoutIssue("warning", { time, code: "container_overflow" })],
+        ),
+      });
     const normal = await runScenario(warningDriver(), { strict: false });
     const strict = await runScenario(warningDriver(), { strict: true });
 
@@ -1025,6 +1058,57 @@ describe("check pipeline", () => {
       "Could not determine composition duration — no layout samples run",
     );
     expect(checkExitCode(report)).toBe(1);
+  });
+
+  describe("frozen-sweep guard (#U10)", () => {
+    it("fails with sweep_static when a 6s composition's geometry never changes across samples", async () => {
+      const driver = fakeDriver({
+        getDuration: vi.fn(async () => 6),
+        collectLayoutGeometry: vi.fn(async () => "frozen"),
+      });
+      const { report } = await runScenario(driver);
+
+      expect(report.ok).toBe(false);
+      expect(
+        report.layout.findings.some(
+          (finding) =>
+            finding.code === "sweep_static" &&
+            finding.severity === "error" &&
+            finding.message.includes("did not advance"),
+        ),
+      ).toBe(true);
+    });
+
+    it("does not flag a 1.5s static title card — too short for the guard to apply", async () => {
+      const driver = fakeDriver({
+        getDuration: vi.fn(async () => 1.5),
+        collectLayoutGeometry: vi.fn(async () => "frozen"),
+      });
+      const { report } = await runScenario(driver);
+
+      expect(report.layout.findings.some((finding) => finding.code === "sweep_static")).toBe(false);
+    });
+
+    it("does not double-report when a motion_frozen finding already covers the same symptom", async () => {
+      const motion: MotionSpecResolution = {
+        kind: "valid",
+        path: "/project/index.motion.json",
+        spec: { assertions: [{ kind: "keepsMoving" }] },
+      };
+      const driver = fakeDriver({
+        getDuration: vi.fn(async () => 6),
+        collectLayoutGeometry: vi.fn(async () => "frozen"),
+        collectMotionFrame: vi.fn(async (time: number) => ({
+          time,
+          data: {},
+          liveness: { "*": "unchanging" },
+        })),
+      });
+      const { report } = await runScenario(driver, {}, { motion });
+
+      expect(report.motion.findings.some((finding) => finding.code === "motion_frozen")).toBe(true);
+      expect(report.layout.findings.some((finding) => finding.code === "sweep_static")).toBe(false);
+    });
   });
 });
 

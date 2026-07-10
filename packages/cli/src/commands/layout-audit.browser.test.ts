@@ -651,7 +651,91 @@ describe("layout-audit.browser occlusion", () => {
     });
     expect(issues.some((issue) => issue.code === "text_occluded")).toBe(false);
   });
+
+  it("carries the fully-covered fraction when the occluder hits every probe point", () => {
+    const occluded = auditOcclusionScene({
+      overlayStyle: { backgroundColor: "rgb(10, 10, 10)" },
+      topmostId: "overlay",
+    }).find((issue) => issue.code === "text_occluded");
+    expect(occluded?.coveredFraction).toBe(1);
+  });
+
+  // #U10: a 2-point hit on the 27-point probe grid (3 rows x 9 columns) is a
+  // sliver of edge cover — reports ~0.07 coverage either way, but only GATES
+  // (produces a finding) for short atomic labels; ordinary prose survives it.
+  it("reports ~0.07 coverage for a 2-of-27 grid hit and flags an atomic label at that coverage", () => {
+    const issues = auditCoverageScene({ text: "SUBSCRIBE", hitCount: 2 });
+    const occluded = issues.find((issue) => issue.code === "text_occluded");
+    expect(occluded).toBeDefined();
+    expect(occluded?.coveredFraction).toBe(0.07);
+  });
+
+  it("does not flag ordinary prose at the same ~0.07 coverage a label would flag at", () => {
+    const issues = auditCoverageScene({
+      text: "This paragraph is long enough to read as ordinary prose, not a label.",
+      hitCount: 2,
+    });
+    expect(issues.some((issue) => issue.code === "text_occluded")).toBe(false);
+  });
+
+  it("flags prose once coverage clears the 0.15 floor", () => {
+    // 5/27 ≈ 0.185, comfortably over the ~0.15 prose floor.
+    const issues = auditCoverageScene({
+      text: "This paragraph is long enough to read as ordinary prose, not a label.",
+      hitCount: 5,
+    });
+    expect(issues.some((issue) => issue.code === "text_occluded")).toBe(true);
+  });
 });
+
+// Mirrors OCCLUSION_PROBE_Y_FRACTIONS / OCCLUSION_PROBE_X_FRACTIONS in
+// layout-audit.browser.js, so a test can force an exact number of grid hits
+// against the same probe coordinates the audit itself sweeps.
+const OCCLUSION_PROBE_Y_FRACTIONS = [0.25, 0.5, 0.75];
+const OCCLUSION_PROBE_X_FRACTIONS = [0.03, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 0.97];
+
+function occlusionProbePoints(textRect: RectInput): Array<{ x: number; y: number }> {
+  const points: Array<{ x: number; y: number }> = [];
+  for (const yFraction of OCCLUSION_PROBE_Y_FRACTIONS) {
+    const y = textRect.top + textRect.height * yFraction;
+    for (const xFraction of OCCLUSION_PROBE_X_FRACTIONS) {
+      points.push({ x: textRect.left + textRect.width * xFraction, y });
+    }
+  }
+  return points;
+}
+
+// Builds an occlusion scene where exactly `hitCount` of the 27 probe points
+// are covered by an opaque overlay and the rest hit the headline itself
+// (self-hit — not foreign, so not counted as occluded).
+function auditCoverageScene(options: {
+  text: string;
+  hitCount: number;
+}): ReturnType<typeof runAudit> {
+  const textRect = { left: 200, top: 500, width: 600, height: 80 };
+  document.body.innerHTML = `
+    <div id="root" data-composition-id="main" data-width="1920" data-height="1080">
+      <div id="headline">${options.text}</div>
+      <div id="overlay"></div>
+    </div>
+  `;
+  installOcclusionGeometry({
+    styleOverrides: { overlay: { backgroundColor: "rgb(10, 10, 10)" } },
+    headlineTextRect: rect(textRect),
+    topmostId: "headline",
+  });
+  const hitPoints = occlusionProbePoints(textRect).slice(0, options.hitCount);
+  (
+    document as unknown as { elementFromPoint: (x: number, y: number) => Element | null }
+  ).elementFromPoint = (x, y) => {
+    const isHit = hitPoints.some(
+      (point) => Math.abs(point.x - x) < 0.01 && Math.abs(point.y - y) < 0.01,
+    );
+    return document.getElementById(isHit ? "overlay" : "headline");
+  };
+  installAuditScript();
+  return runAudit();
+}
 
 function auditOcclusionScene(options: {
   headlineAttrs?: string;
@@ -812,22 +896,19 @@ async function runContrastAudit(): Promise<Array<Record<string, unknown>>> {
   return w.__contrastAuditFinish("stub", 0, candidates);
 }
 
-function runAudit(): Array<{
+interface AuditIssue {
   code: string;
   selector: string;
   containerSelector?: string;
   overflow?: Record<string, number>;
   message?: string;
-}> {
+  coveredFraction?: number;
+}
+
+function runAudit(): AuditIssue[] {
   const audit = (
     window as unknown as {
-      __hyperframesLayoutAudit: (options: { time: number; tolerance: number }) => Array<{
-        code: string;
-        selector: string;
-        containerSelector?: string;
-        overflow?: Record<string, number>;
-        message?: string;
-      }>;
+      __hyperframesLayoutAudit: (options: { time: number; tolerance: number }) => AuditIssue[];
     }
   ).__hyperframesLayoutAudit;
   return audit({ time: 1, tolerance: 2 });

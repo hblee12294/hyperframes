@@ -1,6 +1,15 @@
-import type { CommandDef } from "citty";
-import { runCommand } from "citty";
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Imported before "./validate.js" below: validate.js's own static import of
+// ../utils/project.js triggers that mocked module's factory as soon as
+// validate.js loads, so resolveProjectMock/lintProjectFailureMock must
+// already be bound by then (see the vi.mock calls a few lines down).
+import {
+  lintProjectFailureMock,
+  metaDescription,
+  resolveProjectMock,
+  runAndCaptureStdio,
+  runAndParseJsonEnvelope,
+} from "./deprecationTestHarness.js";
 import {
   extractCompositionErrorsFromLint,
   navigationTimeoutHint,
@@ -37,21 +46,8 @@ vi.mock("../utils/producer.js", () => ({
 // (the first await inside validateInBrowser) gives a fast, deterministic
 // failure well before any real browser or network work — exercising run()'s
 // outer catch (the JSON failure envelope) without needing headless Chrome.
-const FAKE_PROJECT = {
-  dir: "/fake-project",
-  name: "fake-project",
-  indexPath: "/fake-project/index.html",
-};
-
-vi.mock("../utils/project.js", () => ({
-  resolveProject: vi.fn(() => FAKE_PROJECT),
-}));
-
-vi.mock("../utils/lintProject.js", () => ({
-  lintProject: vi.fn(async () => {
-    throw new Error("lint failed (test double)");
-  }),
-}));
+vi.mock("../utils/project.js", () => resolveProjectMock());
+vi.mock("../utils/lintProject.js", () => lintProjectFailureMock());
 
 // Regression for the validate audio-duration-probe timeout: a slow-loading
 // media element's duration was snapshotted once, at a fixed point in time,
@@ -308,14 +304,6 @@ describe("navigationTimeoutHint", () => {
   });
 });
 
-function metaDescription(command: CommandDef): string {
-  const meta = command.meta;
-  if (meta && typeof meta === "object" && "description" in meta) {
-    return String(meta.description ?? "");
-  }
-  throw new Error("expected a synchronous meta object");
-}
-
 describe("validate command deprecation (U5)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -327,41 +315,16 @@ describe("validate command deprecation (U5)", () => {
   });
 
   it("prints a one-line deprecation notice to stderr and never to stdout", async () => {
-    const stderrWrites: string[] = [];
-    const stdoutWrites: string[] = [];
-    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
-      stderrWrites.push(String(chunk));
-      return true;
-    });
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
-      stdoutWrites.push(String(chunk));
-      return true;
-    });
-    vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-    vi.spyOn(console, "log").mockImplementation(() => {});
-
     const { default: validateCommand } = await import("./validate.js");
-    await runCommand(validateCommand, { rawArgs: ["--json"] });
-
-    const stderrText = stderrWrites.join("");
+    const { stderrText, stdoutText } = await runAndCaptureStdio(validateCommand);
     expect(stderrText).toContain("hyperframes validate");
     expect(stderrText).toContain("hyperframes check");
-    expect(stdoutWrites.join("")).toBe("");
+    expect(stdoutText).toBe("");
   });
 
   it("--json output is valid JSON with _meta.deprecated === true on failure", async () => {
-    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
     const { default: validateCommand } = await import("./validate.js");
-    await runCommand(validateCommand, { rawArgs: ["--json"] });
-
-    const jsonCall = logSpy.mock.calls.find(
-      ([arg]) => typeof arg === "string" && arg.trim().startsWith("{"),
-    );
-    expect(jsonCall).toBeDefined();
-    const parsed = JSON.parse(String(jsonCall?.[0]));
+    const { parsed } = await runAndParseJsonEnvelope(validateCommand);
     expect(parsed.ok).toBe(false);
     expect(parsed._meta.deprecated).toBe(true);
   });
