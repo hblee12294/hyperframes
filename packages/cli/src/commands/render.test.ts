@@ -14,8 +14,21 @@ const configState = vi.hoisted(() => ({
   // Defaults to "trial already fired" so the pre-existing renderLocal tests
   // below (which predate the DE-parallel-router trial and don't expect
   // HF_DE_PARALLEL_ROUTER to be touched) keep their exact prior behavior.
-  config: { telemetryEnabled: true, deParallelRouterTrialFired: true } as Record<string, unknown>,
+  //
+  // `disk` is the authoritative "file"; `cache` models config.ts's real
+  // process-lifetime cachedConfig. Modeling them SEPARATELY matters: a mock
+  // where readConfig/readConfigFresh both read one live object hides
+  // exactly the class of bug where production code reads the stale cache
+  // when it needed a fresh disk read (review finding).
+  disk: {
+    telemetryEnabled: true,
+    deParallelRouterTrialFired: true,
+  } as Record<string, unknown>,
+  cache: null as Record<string, unknown> | null,
   writeConfigCalls: [] as Array<Record<string, unknown>>,
+  // Simulate the real writeConfig's silent fs-error swallowing (unwritable
+  // ~/.hyperframes): the next N writes are recorded but never reach `disk`.
+  failWrites: 0,
 }));
 
 const trackingState = vi.hoisted(() => ({
@@ -66,11 +79,22 @@ vi.mock("../utils/producer.js", () => ({
 }));
 
 vi.mock("../telemetry/config.js", () => ({
-  readConfig: vi.fn(() => ({ ...configState.config })),
-  readConfigFresh: vi.fn(() => ({ ...configState.config })),
+  readConfig: vi.fn(() => {
+    if (!configState.cache) configState.cache = { ...configState.disk };
+    return { ...configState.cache };
+  }),
+  readConfigFresh: vi.fn(() => {
+    configState.cache = { ...configState.disk };
+    return { ...configState.disk };
+  }),
   writeConfig: vi.fn((config: Record<string, unknown>) => {
-    configState.config = { ...config };
     configState.writeConfigCalls.push({ ...config });
+    if (configState.failWrites > 0) {
+      configState.failWrites--;
+      return; // swallowed silently, like the real writeConfig's catch {}
+    }
+    configState.disk = { ...config };
+    configState.cache = { ...config };
   }),
 }));
 
@@ -120,7 +144,9 @@ describe("renderLocal browser GPU config", () => {
     producerState.createdJobs = [];
     producerState.resolveConfigCalls = [];
     producerState.executeImpl = async () => undefined;
-    configState.config = { telemetryEnabled: true, deParallelRouterTrialFired: true };
+    configState.disk = { telemetryEnabled: true, deParallelRouterTrialFired: true };
+    configState.cache = null;
+    configState.failWrites = 0;
     configState.writeConfigCalls = [];
     trackingState.shouldTrack = true;
     resetTrialState();
@@ -472,6 +498,8 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   beforeEach(() => {
     producerState.createdJobs = [];
     producerState.executeImpl = async () => undefined;
+    configState.cache = null;
+    configState.failWrites = 0;
     configState.writeConfigCalls = [];
     trackingState.shouldTrack = true;
     // The "managed by us" flag lives at module scope in render.ts (real CLI
@@ -509,7 +537,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   };
 
   it("enables the trial (sets the env var) on a fresh install with telemetry on", async () => {
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -519,7 +547,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   });
 
   it("does not override an env var the user already set themselves", async () => {
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -530,7 +558,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   });
 
   it("does not enable the trial once it has already fired for this install", async () => {
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: true,
       telemetryNoticeShown: true,
@@ -540,7 +568,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   });
 
   it("does not enable the trial when shouldTrack() is false (dev mode / DO_NOT_TRACK)", async () => {
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -551,7 +579,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   });
 
   it("does not enable the trial when config.telemetryEnabled is false, even if shouldTrack() is stale-true (e.g. `hyperframes telemetry off` mid-batch)", async () => {
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: false,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -567,7 +595,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
     // brand-new install's very first invocation. Requiring
     // telemetryNoticeShown means the trial never races an opt-in message
     // against the disclosure it depends on.
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: false,
@@ -577,7 +605,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   });
 
   it("does NOT persist the trial as fired on a clean 'routed' success — keeps trying on future renders", async () => {
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -600,7 +628,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   });
 
   it("persists the trial as fired when the router's own safety net actually reverted", async () => {
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -618,7 +646,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   });
 
   it("does not persist the trial as fired or increment the render count when the router never became eligible for this render", async () => {
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -639,7 +667,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   });
 
   it("does NOT persist the trial as fired when a render merely 'routed' crashes for an unrelated reason (e.g. cancellation) — not a router failure", async () => {
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -663,7 +691,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   });
 
   it("persists the trial as fired from the failure path when the router's safety net reverted but the retry still failed", async () => {
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -686,7 +714,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
     // maybeEnableDeParallelRouterTrial saw process.env.HF_DE_PARALLEL_ROUTER
     // already "true" (set by row 1) and mistook that for "the user set it",
     // returning trialArmed=false — silently dropping row 2's revert.
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -700,7 +728,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
     };
     await renderLocal("/tmp/project", "/tmp/out.mp4", baseOptions);
     expect(process.env.HF_DE_PARALLEL_ROUTER).toBe("true");
-    expect(configState.config.deParallelRouterTrialFired).toBe(false);
+    expect(configState.disk.deParallelRouterTrialFired).toBe(false);
 
     producerState.executeImpl = async (job) => {
       job.perfSummary = {
@@ -722,7 +750,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
     // test in this block), not for genuinely concurrent ones (review
     // finding). render.ts sets this option to true whenever batchConcurrency
     // > 1; verify that gate actually prevents arming.
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -736,7 +764,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   });
 
   it("does not override an env var the user set between two renders in the same process", async () => {
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -759,7 +787,7 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
   });
 
   it("caps exposure at DE_PARALLEL_ROUTER_TRIAL_MAX_RENDERS even when the router never reverts", async () => {
-    configState.config = {
+    configState.disk = {
       telemetryEnabled: true,
       deParallelRouterTrialFired: false,
       telemetryNoticeShown: true,
@@ -784,6 +812,70 @@ describe("renderLocal — DE parallel-router CLI trial", () => {
     expect(process.env.HF_DE_PARALLEL_ROUTER).toBeUndefined();
 
     // The 26th eligible render must not re-arm it.
+    await renderLocal("/tmp/project", "/tmp/out.mp4", baseOptions);
+    expect(process.env.HF_DE_PARALLEL_ROUTER).toBeUndefined();
+  });
+
+  it("observes a telemetry opt-out written by another process mid-batch (arm site reads fresh, not cached)", async () => {
+    configState.disk = {
+      telemetryEnabled: true,
+      deParallelRouterTrialFired: false,
+      telemetryNoticeShown: true,
+    };
+    // Row 1 arms and primes the config cache.
+    await renderLocal("/tmp/project", "/tmp/out.mp4", baseOptions);
+    expect(process.env.HF_DE_PARALLEL_ROUTER).toBe("true");
+
+    // Another process runs `hyperframes telemetry off`, writing straight to
+    // "disk" — this process's cache still says telemetryEnabled: true, so a
+    // cached read at the arm site would keep arming (review finding).
+    configState.disk = { ...configState.disk, telemetryEnabled: false };
+
+    await renderLocal("/tmp/project", "/tmp/out.mp4", baseOptions);
+    expect(process.env.HF_DE_PARALLEL_ROUTER).toBeUndefined();
+  });
+
+  it("re-asserts the fired flag when the write is lost (concurrent clobber / transient failure), without re-counting the render", async () => {
+    configState.disk = {
+      telemetryEnabled: true,
+      deParallelRouterTrialFired: false,
+      telemetryNoticeShown: true,
+    };
+    configState.failWrites = 1; // the consume's main write is silently dropped
+    producerState.executeImpl = async (job) => {
+      job.perfSummary = {
+        resolution: { width: 100, height: 100 },
+        drawElement: { parallelRouter: "reverted" },
+      };
+    };
+    await renderLocal("/tmp/project", "/tmp/out.mp4", baseOptions);
+    // The fired flag was verified and re-asserted (idempotent)...
+    expect(configState.disk.deParallelRouterTrialFired).toBe(true);
+    // ...but the render counter is deliberately NOT re-applied — a lost
+    // increment under a race is benign, a re-applied one double-counts the
+    // render and trips the exposure cap early (review finding).
+    expect(configState.disk.deParallelRouterTrialRenderCount).toBeUndefined();
+  });
+
+  it("blocks re-arming for the rest of the process when the fired flag can never persist (unwritable config)", async () => {
+    configState.disk = {
+      telemetryEnabled: true,
+      deParallelRouterTrialFired: false,
+      telemetryNoticeShown: true,
+    };
+    configState.failWrites = Number.MAX_SAFE_INTEGER; // ~/.hyperframes is unwritable
+    producerState.executeImpl = async (job) => {
+      job.perfSummary = {
+        resolution: { width: 100, height: 100 },
+        drawElement: { parallelRouter: "reverted" },
+      };
+    };
+    await renderLocal("/tmp/project", "/tmp/out.mp4", baseOptions);
+    // Nothing could persist...
+    expect(configState.disk.deParallelRouterTrialFired).toBe(false);
+    // ...but the in-process latch still blocks the next render from
+    // re-running the experiment that just failed (review finding).
+    producerState.executeImpl = async () => undefined;
     await renderLocal("/tmp/project", "/tmp/out.mp4", baseOptions);
     expect(process.env.HF_DE_PARALLEL_ROUTER).toBeUndefined();
   });
