@@ -222,6 +222,90 @@ export function isDrawElementVerificationError(err: unknown): boolean {
   return false;
 }
 
+/** Wait for inline CSS background images introduced by the latest seek. */
+export async function decodeDynamicCssBackgroundImages(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const root = globalThis as typeof globalThis & {
+      __hf_css_background_decoded?: Set<string>;
+      __hfDecodeDynamicCssBackgroundImages?: () => Promise<void>;
+    };
+    const decode = (root.__hfDecodeDynamicCssBackgroundImages ??= async () => {
+      const decoded = (root.__hf_css_background_decoded ??= new Set<string>());
+      const urls: string[] = [];
+      const parseBackgroundUrls = (value: string): string[] => {
+        const found: string[] = [];
+        let cursor = 0;
+
+        while (cursor < value.length) {
+          const start = value.indexOf("url(", cursor);
+          if (start < 0) break;
+
+          let index = start + 4;
+          while (index < value.length && /\s/.test(value[index] ?? "")) index += 1;
+
+          const quote = value[index] === '"' || value[index] === "'" ? value[index] : null;
+          if (quote) index += 1;
+          const contentStart = index;
+          let contentEnd = -1;
+
+          while (index < value.length) {
+            const char = value[index];
+            if (char === "\\") {
+              index = Math.min(index + 2, value.length);
+              continue;
+            }
+            if ((quote && char === quote) || (!quote && char === ")")) {
+              contentEnd = index;
+              break;
+            }
+            index += 1;
+          }
+
+          if (contentEnd < 0) break;
+          if (quote) {
+            index += 1;
+            while (index < value.length && /\s/.test(value[index] ?? "")) index += 1;
+            if (value[index] !== ")") {
+              cursor = index;
+              continue;
+            }
+          }
+
+          const url = value.slice(contentStart, contentEnd).trim();
+          if (url) found.push(url);
+          cursor = index + 1;
+        }
+
+        return found;
+      };
+
+      for (const element of document.querySelectorAll<HTMLElement>('[style*="background"]')) {
+        const backgroundImage = element.style.backgroundImage;
+        if (!backgroundImage || backgroundImage === "none") continue;
+
+        for (const url of parseBackgroundUrls(backgroundImage)) {
+          if (!decoded.has(url)) urls.push(url);
+        }
+      }
+
+      await Promise.all(
+        [...new Set(urls)].map(async (url) => {
+          const image = new Image();
+          image.src = url;
+          try {
+            await image.decode();
+            decoded.add(url);
+          } catch {
+            // Keep existing capture behavior for missing assets; request diagnostics report them.
+          }
+        }),
+      );
+    });
+
+    await decode();
+  });
+}
+
 // Circular buffer for browser console messages dumped on render failure diagnostics.
 // Complex compositions produce 100+ messages; 50 was too small to capture relevant errors.
 const BROWSER_CONSOLE_BUFFER_SIZE = 200;
@@ -712,6 +796,9 @@ async function finalizeDrawElementInit(
   opts: { transparent: boolean; forceDE: boolean },
 ): Promise<void> {
   const { transparent, forceDE } = opts;
+  // Install the page-local decoder before batch drawElement capture begins;
+  // the batch loop re-runs it after every in-page seek.
+  await decodeDynamicCssBackgroundImages(page);
   // Self-verification ground truth: must run pre-injection — after the canvas
   // wraps the root, a page screenshot shows the canvas's last-drawn bitmap,
   // not the live DOM (see the Lim 6 boundary-screenshot note).
@@ -2004,6 +2091,8 @@ async function prepareFrameForCapture(
     return !!(window as unknown as { __hf_page_composite_pending?: boolean })
       .__hf_page_composite_pending;
   }, quantizedTime);
+
+  await decodeDynamicCssBackgroundImages(page);
 
   const seekMs = Date.now() - seekStart;
 
@@ -3406,6 +3495,11 @@ const TRANSIENT_BROWSER_ERROR_PATTERNS = [
   /Failed to launch the browser process/i,
   /Navigation timeout of \d+ ms exceeded/i,
   /ECONNREFUSED/i,
+  // Chromium can briefly invalidate even a localhost connection when Windows
+  // reports an adapter/route change. A fresh capture session succeeds once the
+  // network stack settles, so treat this like the other bounded navigation
+  // retries instead of failing the render immediately.
+  /net::ERR_NETWORK_CHANGED/i,
   // pollHfReady's own timeout — thrown when window.__renderReady never flips
   // true within playerReadyTimeout. "Runtime ready: false" means init simply
   // didn't finish in time (commonly a slow/contended host, e.g. several
