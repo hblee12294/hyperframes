@@ -4,7 +4,7 @@ import { delimiter, join, resolve } from "node:path";
 
 /**
  * Shared FFmpeg/FFprobe binary resolution for every package that shells out
- * to them (engine, cli, lint). Node-only: import via the
+ * to them (engine, cli, lint, studio-server). Node-only: import via the
  * `@hyperframes/parsers/ff-binaries` subpath, never from a browser bundle.
  */
 
@@ -92,6 +92,12 @@ function findInCommonDirs(name: FfBinaryName): string | undefined {
   return undefined;
 }
 
+function findInProjectLocalBin(name: FfBinaryName): string | undefined {
+  const extension = process.platform === "win32" ? ".exe" : "";
+  const candidate = resolve(".hyperframes", "bin", `${name}${extension}`);
+  return existsSync(candidate) ? candidate : undefined;
+}
+
 function lookupOnSystem(name: FfBinaryName): string | undefined {
   if (pathLookupCache.has(name)) return pathLookupCache.get(name);
   let found: string | undefined;
@@ -106,6 +112,7 @@ function lookupOnSystem(name: FfBinaryName): string | undefined {
   } catch {
     found = scanPath(name);
   }
+  found ??= findInProjectLocalBin(name);
   found ??= findInCommonDirs(name);
   const resolved = found ? resolve(found) : undefined;
   pathLookupCache.set(name, resolved);
@@ -125,9 +132,10 @@ export interface FindFfBinaryOptions {
 
 /**
  * Resolve an FFmpeg-family binary: env override first, then `which`/`where`,
- * then a manual PATH scan (covers Windows PATHEXT), then well-known Unix
- * install dirs. System lookups are cached per binary for the process
- * lifetime; the env override is re-read on every call.
+ * then a manual PATH scan (covers Windows PATHEXT), a project-local
+ * `.hyperframes/bin`, then well-known Unix install dirs. System lookups are
+ * cached per binary for the process lifetime; the env override is re-read on
+ * every call.
  */
 export function findFfBinary(
   name: FfBinaryName,

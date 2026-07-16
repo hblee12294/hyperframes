@@ -108,6 +108,38 @@ describe("findFfBinary", () => {
     expect(findFfBinary("ffmpeg")).toBe(resolve("/opt/homebrew/bin/ffmpeg"));
   });
 
+  it("falls back to the project-local .hyperframes bin", async () => {
+    delete process.env.HYPERFRAMES_FFMPEG_PATH;
+    process.env.PATH = "";
+    const projectBinary = resolve(
+      ".hyperframes",
+      "bin",
+      process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg",
+    );
+    vi.resetModules();
+    vi.doMock("node:child_process", () => {
+      const mocked = {
+        execFileSync: () => {
+          throw new Error("not found");
+        },
+      };
+      return { ...mocked, default: mocked };
+    });
+    vi.doMock("node:fs", () => {
+      const mocked = {
+        existsSync: (candidate: unknown) => candidate === projectBinary,
+        accessSync: () => {
+          throw new Error("not executable");
+        },
+        constants: { X_OK: 1 },
+      };
+      return { ...mocked, default: mocked };
+    });
+    const { findFfBinary } = await importFresh();
+
+    expect(findFfBinary("ffmpeg")).toBe(projectBinary);
+  });
+
   it("returns undefined when the binary is nowhere, and caches the miss until cleared", async () => {
     delete process.env.HYPERFRAMES_FFMPEG_PATH;
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
