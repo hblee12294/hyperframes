@@ -1192,7 +1192,9 @@ async function applyGsapMutations(
     status ? c.json(data, status) : c.json(data);
   let writer: "recast" | "acorn";
   try {
-    writer = resolveGsapWriter(process.env);
+    writer = resolveGsapWriter({
+      HYPERFRAMES_GSAP_WRITER: process.env["HYPERFRAMES_GSAP_WRITER"],
+    });
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
   }
@@ -2427,7 +2429,9 @@ export function registerFileRoutes(api: Hono, adapter: StudioApiAdapter): void {
     if (!project) return c.json({ error: "not found" }, 404);
     let writer: "recast" | "acorn";
     try {
-      writer = resolveGsapWriter(process.env);
+      writer = resolveGsapWriter({
+        HYPERFRAMES_GSAP_WRITER: process.env["HYPERFRAMES_GSAP_WRITER"],
+      });
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
