@@ -163,10 +163,7 @@ const commandLoaders = {
 };
 
 const subCommands = Object.fromEntries(
-  Object.entries(commandLoaders).map(([name, load]) => [
-    name,
-    trackCommandFailures(load, (error) => reportCommandFailure(command, error)),
-  ]),
+  Object.entries(commandLoaders).map(([name, load]) => [name, trackCommandFailures(load)]),
 );
 
 const main = defineCommand({
