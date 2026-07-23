@@ -19,6 +19,7 @@ function createMockDeps() {
     onSetRootDuration: vi.fn(),
     onEnablePickMode: vi.fn(),
     onDisablePickMode: vi.fn(),
+    onQueryHitModel: vi.fn(),
     getCanonicalFps: vi.fn(() => 30),
   };
 }
@@ -42,6 +43,13 @@ describe("installRuntimeControlBridge", () => {
     const handler = installRuntimeControlBridge(deps);
     handler(makeControlMessage("pause"));
     expect(deps.onPause).toHaveBeenCalledOnce();
+  });
+
+  it("dispatches query-hit-model command, forwarding the requestId", () => {
+    const deps = createMockDeps();
+    const handler = installRuntimeControlBridge(deps);
+    handler(makeControlMessage("query-hit-model", { requestId: "req-1" }));
+    expect(deps.onQueryHitModel).toHaveBeenCalledWith("req-1");
   });
 
   it("dispatches stop-media command", () => {

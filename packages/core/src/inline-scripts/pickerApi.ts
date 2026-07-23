@@ -16,6 +16,13 @@ export type HyperframePickerElementInfo = {
   dataAttributes: Record<string, string>;
 };
 
+/** A picker element augmented with a `paints` flag, for the host-driven hit-model query.
+ *  `paints` = the element visibly paints at the current frame (background/border/media/own text);
+ *  a `false` element is transparent to hit-testing (clicks fall through it). */
+export type HitModelElementInfo = HyperframePickerElementInfo & {
+  paints: boolean;
+};
+
 export type HyperframePickerApi = {
   enable: () => void;
   disable: () => void;

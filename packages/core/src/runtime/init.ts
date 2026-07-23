@@ -3092,6 +3092,14 @@ export function initSandboxRuntimeModular(): void {
     },
     onEnablePickMode: () => picker.enablePickMode(),
     onDisablePickMode: () => picker.disablePickMode(),
+    onQueryHitModel: (requestId) => {
+      postRuntimeMessage({
+        source: "hf-preview",
+        type: "hit-model",
+        requestId,
+        elements: picker.getHitModel(),
+      });
+    },
     getCanonicalFps: () => state.canonicalFps,
   });
 

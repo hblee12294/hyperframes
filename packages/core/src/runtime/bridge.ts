@@ -28,6 +28,7 @@ type BridgeDeps = {
   ) => void;
   onEnablePickMode: () => void;
   onDisablePickMode: () => void;
+  onQueryHitModel: (requestId?: string) => void;
   getCanonicalFps: () => number;
 };
 
@@ -74,6 +75,7 @@ const CONTROL_HANDLERS: Record<string, ControlHandler> = {
     deps.onSetColorGradingCompare(data.target ?? null, data.compare ?? null),
   "enable-pick-mode": (_d, deps) => deps.onEnablePickMode(),
   "disable-pick-mode": (_d, deps) => deps.onDisablePickMode(),
+  "query-hit-model": (data, deps) => deps.onQueryHitModel(data.requestId),
   "flash-elements": (data) => handleFlashElements(data),
 };
 

@@ -9,7 +9,7 @@ export type RuntimeJson =
   | { [key: string]: RuntimeJson };
 
 import type { HyperframeControlAction } from "../inline-scripts/runtimeContract.js";
-import type { HyperframePickerElementInfo } from "../inline-scripts/pickerApi.js";
+import type { HyperframePickerElementInfo, HitModelElementInfo } from "../inline-scripts/pickerApi.js";
 import type { RuntimeProtocolV1 } from "./protocol.js";
 
 export type RuntimeBridgeControlAction =
@@ -21,7 +21,8 @@ export type RuntimeBridgeControlAction =
   | "set-web-audio-media-disabled"
   | "set-root-duration"
   | "stop-media"
-  | "flash-elements";
+  | "flash-elements"
+  | "query-hit-model";
 
 export type RuntimeBridgeControlMessage = {
   source: "hf-parent";
@@ -38,6 +39,8 @@ export type RuntimeBridgeControlMessage = {
   grading?: RuntimeJson;
   compare?: RuntimeJson;
   seekMode?: "drag" | "commit";
+  /** Correlation id echoed back on the matching `hit-model` reply (query-hit-model). */
+  requestId?: string;
 };
 
 export type RuntimeStateMessage = {
@@ -134,6 +137,16 @@ export type RuntimePickerCancelledMessage = {
   type: "pick-mode-cancelled";
 };
 
+/** Reply to a `query-hit-model` control message: every paintable element of the composition at the
+ *  current frame, in composition-internal coordinates, each with a `paints` flag. The host caches
+ *  this and resolves clicks against it (region-aware selection / click-through). */
+export type RuntimeHitModelMessage = {
+  source: "hf-preview";
+  type: "hit-model";
+  requestId?: string;
+  elements: HitModelElementInfo[];
+};
+
 export type RuntimeStageSizeMessage = {
   source: "hf-preview";
   type: "stage-size";
@@ -211,6 +224,7 @@ export type RuntimeOutboundMessage =
   | RuntimePickerPickedMessage
   | RuntimePickerPickedManyMessage
   | RuntimePickerCancelledMessage
+  | RuntimeHitModelMessage
   | RuntimeStageSizeMessage
   | RuntimeMediaAutoplayBlockedMessage
   | RuntimeReadyMessage

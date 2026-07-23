@@ -1,4 +1,5 @@
 import type { RuntimeJson, RuntimeOutboundMessage, RuntimePickerElementInfo } from "./types";
+import type { HitModelElementInfo } from "../inline-scripts/pickerApi";
 import { COLOR_GRADING_SOURCE_HIDDEN_ATTR } from "../colorGrading";
 import { swallow } from "./diagnostics";
 
@@ -23,7 +24,42 @@ export type PickerModule = {
   enablePickMode: () => void;
   disablePickMode: () => void;
   installPickerApi: () => void;
+  /** Enumerate the composition's paintable elements at the current frame (host hit-model query). */
+  getHitModel: () => HitModelElementInfo[];
 };
+
+/**
+ * Does the element visibly paint at the current frame — a background, border, intrinsic media, or
+ * its own (non-whitespace) text? Used to distinguish a meaningful/decorative paint (a hit target)
+ * from a transparent grouping container (a click falls through it). Pure w.r.t. `win.getComputedStyle`.
+ */
+const INTRINSIC_PAINT_TAGS = new Set(["img", "picture", "video", "canvas", "svg"]);
+
+export function elementPaints(el: Element, win: Window): boolean {
+  if (INTRINSIC_PAINT_TAGS.has(el.tagName.toLowerCase())) return true;
+
+  const cs = win.getComputedStyle(el);
+
+  const bg = cs.backgroundColor;
+  if (bg && bg !== "transparent" && bg !== "rgba(0, 0, 0, 0)" && bg !== "rgba(0,0,0,0)") return true;
+
+  const bgImage = cs.backgroundImage;
+  if (bgImage && bgImage !== "none") return true;
+
+  for (const side of ["top", "right", "bottom", "left"] as const) {
+    const style = cs.getPropertyValue(`border-${side}-style`);
+    const width = Number.parseFloat(cs.getPropertyValue(`border-${side}-width`) || "0");
+    if (style && style !== "none" && style !== "hidden" && width > 0) return true;
+  }
+
+  // Own (direct) non-whitespace text — a text leaf paints; a grouping wrapper (text only in
+  // descendant elements) does not.
+  for (const node of Array.from(el.childNodes)) {
+    if (node.nodeType === 3 && (node.textContent ?? "").trim() !== "") return true;
+  }
+
+  return false;
+}
 
 export function createPickerModule(deps: PickerModuleDeps): PickerModule {
   let pickModeActive = false;
@@ -310,5 +346,21 @@ export function createPickerModule(deps: PickerModuleDeps): PickerModule {
     emitPickerRuntimeEvent("hyperframe:picker:api-ready", { hasApi: true, timestamp: Date.now() });
   }
 
-  return { enablePickMode, disablePickMode, installPickerApi };
+  function getHitModel(): HitModelElementInfo[] {
+    const win = document.defaultView;
+    if (!win) return [];
+    // Scope to the composition root's subtree (excludes html/head/body and the root itself), and
+    // skip nested composition roots — the host treats full-bleed frames as background.
+    const root = document.querySelector("[data-composition-id]");
+    const scope: ParentNode = root ?? document.body;
+    const out: HitModelElementInfo[] = [];
+    scope.querySelectorAll<HTMLElement>("*").forEach((el) => {
+      if (el.hasAttribute("data-composition-id")) return;
+      if (!isPickableElement(el)) return;
+      out.push({ ...extractElementInfo(el), paints: elementPaints(el, win) });
+    });
+    return out;
+  }
+
+  return { enablePickMode, disablePickMode, installPickerApi, getHitModel };
 }
